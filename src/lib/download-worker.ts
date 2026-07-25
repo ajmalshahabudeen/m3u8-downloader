@@ -75,25 +75,31 @@ async function processDownload(id: string) {
       DOWNLOADER_PREF === "downloadm3u8" ? "downloadm3u8" : "ffmpeg";
 
     const streamUrl = download.url;
+    const referer = download.referer?.trim() || "";
 
     console.log(
-      `[download] id=${id} format=${download.format} res=${download.resolution ?? "auto"} via python prefer=${prefer}`,
+      `[download] id=${id} format=${download.format} res=${download.resolution ?? "auto"} referer=${referer ? "yes" : "auto"} via python prefer=${prefer}`,
     );
+
+    const pyArgs = [
+      "--url",
+      streamUrl,
+      "--output",
+      filePath,
+      "--format",
+      download.format || "mp4",
+      "--prefer",
+      prefer,
+      "--timeout",
+      String(Math.max(60, Math.floor(DOWNLOAD_TIMEOUT_MS / 1000))),
+    ];
+    if (referer) {
+      pyArgs.push("--referer", referer);
+    }
 
     const { code, stdout, stderr } = await runPython(
       "download_stream.py",
-      [
-        "--url",
-        streamUrl,
-        "--output",
-        filePath,
-        "--format",
-        download.format || "mp4",
-        "--prefer",
-        prefer,
-        "--timeout",
-        String(Math.max(60, Math.floor(DOWNLOAD_TIMEOUT_MS / 1000))),
-      ],
+      pyArgs,
       {
         timeoutMs: DOWNLOAD_TIMEOUT_MS + 15_000,
         onStderrLine: (line) => {

@@ -26,6 +26,8 @@ model Download {
   id         String         @id @default(cuid())
   title      String
   url        String
+  /// Page URL used as Referer/Origin when fetching CDN-protected HLS
+  referer    String?
   format     String         @default("mp4")
   resolution String?
   status     DownloadStatus @default(PENDING)

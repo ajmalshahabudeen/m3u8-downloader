@@ -28,8 +28,8 @@ export async function extractStreamFromUrl(
   if (options.noBrowser) args.push("--no-browser");
   else if (deep) args.push("--deep");
 
-  // Browser scrape can take a while
-  const timeoutMs = options.noBrowser ? 45_000 : 120_000;
+  // Browser scrape can take a while (includes TLS retries)
+  const timeoutMs = options.noBrowser ? 90_000 : 150_000;
 
   const { code, stdout, stderr } = await runPython(
     "extract_stream.py",

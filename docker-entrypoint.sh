@@ -41,6 +41,8 @@ if "stage" not in cols:
     alters.append("ALTER TABLE Download ADD COLUMN stage TEXT NOT NULL DEFAULT 'queued'")
 if "stageLabel" not in cols:
     alters.append("ALTER TABLE Download ADD COLUMN stageLabel TEXT NOT NULL DEFAULT 'Queued'")
+if "referer" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN referer TEXT")
 for sql in alters:
     print(f"  + {sql}")
     cur.execute(sql)
@@ -57,6 +59,7 @@ if ! npx prisma migrate deploy; then
   echo "⚠ migrate deploy failed — if columns already exist, mark known migrations applied"
   # Recover from "duplicate column" after columns were added out-of-band
   npx prisma migrate resolve --applied 20260725200000_add_format_stage_resolution 2>/dev/null || true
+  npx prisma migrate resolve --applied 20260726120000_add_referer 2>/dev/null || true
   npx prisma migrate deploy || true
 fi
 

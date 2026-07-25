@@ -5,7 +5,7 @@ import { extractStreamFromUrl } from "@/lib/extract-stream";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Allow long Playwright scrapes
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 const bodySchema = z.object({
   url: z.string().trim().url("Enter a valid URL"),

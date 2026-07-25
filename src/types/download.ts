@@ -31,6 +31,7 @@ export interface DownloadRecord {
   id: string;
   title: string;
   url: string;
+  referer: string | null;
   format: string;
   resolution: string | null;
   status: DownloadStatus;
@@ -49,6 +50,7 @@ export function serializeDownload(download: {
   id: string;
   title: string;
   url: string;
+  referer?: string | null;
   format: string;
   resolution: string | null;
   status: DownloadStatus;
@@ -66,6 +68,7 @@ export function serializeDownload(download: {
     id: download.id,
     title: download.title,
     url: download.url,
+    referer: download.referer ?? null,
     format: download.format,
     resolution: download.resolution,
     status: download.status,

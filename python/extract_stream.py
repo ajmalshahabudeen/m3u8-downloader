@@ -35,8 +35,12 @@ UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/122.0.0.0 Safari/537.36"
 )
-TIMEOUT = 20
+TIMEOUT = 25
+# Transient TLS/CDN resets are common on adult/video CDNs — retry before failing
+FETCH_ATTEMPTS = 5
+FETCH_BACKOFF_S = (0.6, 1.2, 2.0, 3.5)
 BROWSER_TIMEOUT_MS = 45_000
+
 M3U8_ABS_RE = re.compile(
     r"https?://[^\s\"'<>\\]+?\.m3u8(?:\?[^\s\"'<>\\]*)?",
     re.I,
@@ -205,6 +209,110 @@ def find_m3u8s_in_text(html: str, base: str) -> list[str]:
     return unique(out)
 
 
+def is_transient_network_error(exc: BaseException) -> bool:
+    """SSL EOF / connection reset / temporary 5xx — worth retrying."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    needles = (
+        "ssl",
+        "tls",
+        "eof",
+        "connection reset",
+        "connection aborted",
+        "temporarily unavailable",
+        "timed out",
+        "timeout",
+        "max retries exceeded",
+        "remote end closed",
+        "broken pipe",
+        "10054",
+        "104",
+        "503",
+        "502",
+        "504",
+        "429",
+    )
+    if any(n in msg for n in needles):
+        return True
+    if "SSL" in name or "Timeout" in name or "Connection" in name:
+        return True
+    # requests wraps urllib3
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "args", [None])[0]
+    if cause is not None and cause is not exc:
+        try:
+            return is_transient_network_error(cause)  # type: ignore[arg-type]
+        except Exception:
+            pass
+    return False
+
+
+def fetch_page_html(url: str) -> tuple[requests.Response | None, list[str]]:
+    """GET page HTML with retries for flaky TLS. Returns (response|None, warnings)."""
+    warnings: list[str] = []
+    last_err: Exception | None = None
+    headers = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Connection": "close",  # avoid stale keep-alive after CDN RST
+    }
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            res = requests.get(
+                url,
+                timeout=TIMEOUT,
+                headers=headers,
+                allow_redirects=True,
+            )
+            # Retry transient HTTP statuses
+            if res.status_code in (429, 502, 503, 504) and attempt < FETCH_ATTEMPTS:
+                warnings.append(
+                    f"Page returned HTTP {res.status_code}; retry {attempt}/{FETCH_ATTEMPTS}…"
+                )
+                time.sleep(FETCH_BACKOFF_S[min(attempt - 1, len(FETCH_BACKOFF_S) - 1)])
+                continue
+            res.raise_for_status()
+            if attempt > 1:
+                warnings.append(f"Page fetch succeeded on attempt {attempt}/{FETCH_ATTEMPTS}.")
+            return res, warnings
+        except requests.Timeout as e:
+            last_err = e
+            if attempt < FETCH_ATTEMPTS:
+                warnings.append(
+                    f"Page timed out; retry {attempt}/{FETCH_ATTEMPTS}…"
+                )
+                time.sleep(FETCH_BACKOFF_S[min(attempt - 1, len(FETCH_BACKOFF_S) - 1)])
+                continue
+        except requests.RequestException as e:
+            last_err = e
+            if attempt < FETCH_ATTEMPTS and is_transient_network_error(e):
+                warnings.append(
+                    f"TLS/network glitch ({type(e).__name__}); "
+                    f"retry {attempt}/{FETCH_ATTEMPTS}…"
+                )
+                time.sleep(FETCH_BACKOFF_S[min(attempt - 1, len(FETCH_BACKOFF_S) - 1)])
+                continue
+            # Non-transient — stop early
+            if not is_transient_network_error(e):
+                break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if attempt < FETCH_ATTEMPTS and is_transient_network_error(e):
+                warnings.append(
+                    f"Fetch error ({type(e).__name__}); retry {attempt}/{FETCH_ATTEMPTS}…"
+                )
+                time.sleep(FETCH_BACKOFF_S[min(attempt - 1, len(FETCH_BACKOFF_S) - 1)])
+                continue
+            break
+
+    warnings.append(
+        f"Page request failed after {FETCH_ATTEMPTS} attempts: {last_err}"
+    )
+    return None, warnings
+
+
 def static_extract(url: str) -> dict[str, Any]:
     warnings: list[str] = []
     if re.search(r"\.m3u8(\?|$)", url, re.I) or ".m3u8?" in url.lower():
@@ -218,22 +326,20 @@ def static_extract(url: str) -> dict[str, Any]:
             "method": "direct",
         }
 
-    try:
-        res = requests.get(
-            url,
-            timeout=TIMEOUT,
-            headers={
-                "User-Agent": UA,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            allow_redirects=True,
-        )
-        res.raise_for_status()
-    except requests.Timeout:
-        die("Timed out while fetching the page (20s)")
-    except requests.RequestException as e:
-        die(f"Page request failed: {e}")
+    res, fetch_warnings = fetch_page_html(url)
+    warnings.extend(fetch_warnings)
+    if res is None:
+        # Soft-fail so caller can still try Playwright browser scrape
+        return {
+            "pageUrl": url,
+            "title": None,
+            "m3u8Url": None,
+            "candidates": [],
+            "source": "none",
+            "warnings": warnings,
+            "method": "static-failed",
+            "fetchFailed": True,
+        }
 
     ctype = (res.headers.get("content-type") or "").lower()
     text = res.text
@@ -387,10 +493,34 @@ def browser_extract(url: str) -> dict[str, Any]:
         page.on("request", on_request)
         page.on("response", on_response)
 
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_TIMEOUT_MS)
-        except Exception as e:
-            warnings.append(f"Initial navigation warning: {e}")
+        navigated = False
+        for attempt in range(1, FETCH_ATTEMPTS + 1):
+            try:
+                page.goto(
+                    url, wait_until="domcontentloaded", timeout=BROWSER_TIMEOUT_MS
+                )
+                navigated = True
+                if attempt > 1:
+                    warnings.append(
+                        f"Browser navigation succeeded on attempt {attempt}/{FETCH_ATTEMPTS}."
+                    )
+                break
+            except Exception as e:
+                if attempt < FETCH_ATTEMPTS and is_transient_network_error(e):
+                    warnings.append(
+                        f"Browser TLS/nav glitch; retry {attempt}/{FETCH_ATTEMPTS}…"
+                    )
+                    time.sleep(
+                        FETCH_BACKOFF_S[min(attempt - 1, len(FETCH_BACKOFF_S) - 1)]
+                    )
+                    continue
+                warnings.append(f"Initial navigation warning: {e}")
+                break
+
+        if not navigated:
+            warnings.append(
+                "Browser could not fully load the page; scraping what we can."
+            )
 
         final_url = page.url
 
@@ -551,19 +681,32 @@ def extract(url: str, deep: bool = False, no_browser: bool = False) -> dict[str,
         return static
 
     has_static = bool(static.get("candidates"))
+    fetch_failed = bool(static.get("fetchFailed"))
+
     if no_browser:
+        if fetch_failed:
+            die(
+                (static.get("warnings") or ["Page request failed"])[-1]
+                if static.get("warnings")
+                else "Page request failed"
+            )
         if not has_static:
             static["warnings"] = list(static.get("warnings") or []) + [
                 "Browser scrape disabled (--no-browser)."
             ]
         return static
 
-    # Use browser when static empty, or when --deep requested
-    if has_static and not deep:
+    # Use browser when static empty/failed, or when --deep requested
+    if has_static and not deep and not fetch_failed:
         static["warnings"] = list(static.get("warnings") or []) + [
             "Found via static HTML. Re-run with deep browser mode if these are wrong."
         ]
         return static
+
+    if fetch_failed:
+        static["warnings"] = list(static.get("warnings") or []) + [
+            "Static fetch failed after retries — trying headless browser…"
+        ]
 
     browser = browser_extract(url)
 
@@ -586,6 +729,14 @@ def extract(url: str, deep: bool = False, no_browser: bool = False) -> dict[str,
             f"(static={len(static.get('candidates') or [])}, "
             f"browser={len(browser.get('candidates') or [])})."
         )
+
+    if not merged and fetch_failed:
+        # Nothing from static or browser — surface the original TLS error
+        err = next(
+            (w for w in warnings if "failed after" in w.lower() or "ssl" in w.lower()),
+            warnings[-1] if warnings else "Extract failed (network)",
+        )
+        die(err)
 
     return {
         "pageUrl": browser.get("pageUrl") or static.get("pageUrl") or url,

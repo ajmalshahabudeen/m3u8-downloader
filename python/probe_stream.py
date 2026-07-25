@@ -3,6 +3,7 @@
 
 Usage:
   python probe_stream.py --url "https://.../master.m3u8"
+  python probe_stream.py --url "..." --referer "https://site.com/watch/1"
   # JSON on stdout
 """
 from __future__ import annotations
@@ -15,25 +16,22 @@ from urllib.parse import urljoin
 
 import requests
 
-UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
+from stream_headers import browser_headers, explain_http_error
+
 TIMEOUT = 20
 
 
 def die(msg: str, code: int = 1) -> None:
-    print(json.dumps({"error": msg}))
+    print(json.dumps({"error": explain_http_error(msg)}))
     raise SystemExit(code)
 
 
-def fetch_text(url: str) -> str:
+def fetch_text(url: str, referer: str | None = None) -> str:
     try:
         r = requests.get(
             url,
             timeout=TIMEOUT,
-            headers={"User-Agent": UA, "Accept": "*/*"},
+            headers=browser_headers(url, referer=referer),
             allow_redirects=True,
         )
         r.raise_for_status()
@@ -59,7 +57,6 @@ def parse_variants(master_url: str, text: str) -> list[dict]:
             ):
                 key, val = part[0].upper(), part[1].strip().strip('"')
                 attrs[key] = val
-            # next non-comment line is URI
             j = i + 1
             while j < len(lines) and lines[j].startswith("#"):
                 j += 1
@@ -95,17 +92,16 @@ def parse_variants(master_url: str, text: str) -> list[dict]:
                 )
                 i = j
         i += 1
-    # highest bandwidth first
     variants.sort(key=lambda v: v.get("bandwidth") or 0, reverse=True)
     return variants
 
 
-def probe(url: str) -> dict:
+def probe(url: str, referer: str | None = None) -> dict:
     url = url.strip()
     if not re.match(r"^https?://", url, re.I):
         die("Only http(s) URLs are supported")
 
-    text = fetch_text(url)
+    text = fetch_text(url, referer=referer)
     warnings: list[str] = []
 
     if "#EXT-X-STREAM-INF" in text:
@@ -134,7 +130,6 @@ def probe(url: str) -> dict:
             "warnings": warnings,
         }
 
-    # Media playlist — single stream
     return {
         "url": url,
         "isMaster": False,
@@ -155,8 +150,10 @@ def probe(url: str) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--url", required=True)
+    p.add_argument("--referer", default="")
     args = p.parse_args()
-    print(json.dumps(probe(args.url), ensure_ascii=False))
+    ref = (args.referer or "").strip() or None
+    print(json.dumps(probe(args.url, referer=ref), ensure_ascii=False))
 
 
 if __name__ == "__main__":

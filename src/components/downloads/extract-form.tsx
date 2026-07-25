@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { HiOutlineLink, HiOutlineSearchCircle } from "react-icons/hi";
-import { FiCheck, FiCopy, FiDownload } from "react-icons/fi";
+import { FiCheck, FiCopy, FiDownload, FiLoader } from "react-icons/fi";
 import {
   Card,
   CardContent,
@@ -42,6 +42,36 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+type ExtractPhase = "idle" | "extracting" | "probing";
+
+function formatElapsed(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m ${s.toString().padStart(2, "0")}s` : `${s}s`;
+}
+
+function phaseLabel(phase: ExtractPhase, deep: boolean, elapsed: number): string {
+  if (phase === "probing") {
+    return "Probing stream variants…";
+  }
+  if (phase !== "extracting") return "";
+  // progressive hints while waiting (server auto-retries TLS)
+  if (elapsed < 8) {
+    return deep
+      ? "Connecting & scraping page (JS + network)…"
+      : "Fetching page HTML…";
+  }
+  if (elapsed < 20) {
+    return "Still working — auto-retrying flaky TLS if needed…";
+  }
+  if (elapsed < 45) {
+    return deep
+      ? "Deep scrape in progress (players / iframes can take a while)…"
+      : "Retrying connection to the site…";
+  }
+  return "Almost there — some CDNs drop the first few handshakes…";
+}
+
 export function ExtractForm() {
   const addOne = useDownloadStore((s) => s.addOne);
   const [result, setResult] = useState<ExtractResult | null>(null);
@@ -50,9 +80,12 @@ export function ExtractForm() {
   const [title, setTitle] = useState("");
   const [format, setFormat] = useState("mp4");
   const [deepMode, setDeepMode] = useState(true);
-  const [extracting, setExtracting] = useState(false);
-  const [probing, setProbing] = useState(false);
+  const [phase, setPhase] = useState<ExtractPhase>("idle");
+  const [elapsed, setElapsed] = useState(0);
   const [queuing, setQueuing] = useState(false);
+  const [pageUrl, setPageUrl] = useState("");
+
+  const extracting = phase === "extracting" || phase === "probing";
 
   const {
     register,
@@ -63,20 +96,36 @@ export function ExtractForm() {
     defaultValues: { url: "" },
   });
 
+  // Elapsed timer while extract/probe is running
+  useEffect(() => {
+    if (!extracting) {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(0);
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - started) / 1000));
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [extracting, phase]);
+
   const onExtract = async (values: FormValues) => {
-    setExtracting(true);
+    setPhase("extracting");
     setResult(null);
     setProbe(null);
     setSelected(null);
+    setPageUrl(values.url);
     try {
       // Server-side extract (Python + optional Playwright) — never browser fetch (CORS)
+      // Server auto-retries SSL/TLS failures (up to ~5 attempts with backoff).
       const { data } = await api.post<{ result: ExtractResult }>(
         "/extract",
         {
           url: values.url,
           deep: deepMode,
         },
-        { timeout: deepMode ? 120_000 : 45_000 },
+        { timeout: deepMode ? 150_000 : 90_000 },
       );
       const r = data.result;
       setResult(r);
@@ -85,18 +134,22 @@ export function ExtractForm() {
       const m3u8 = r.m3u8Url;
       if (m3u8) {
         setSelected(m3u8);
-        setProbing(true);
+        setPhase("probing");
         try {
-          const probeRes = await api.post<{ result: ProbeResult }>("/probe", {
-            url: m3u8,
-          });
+          const probeRes = await api.post<{ result: ProbeResult }>(
+            "/probe",
+            {
+              url: m3u8,
+              // CDN playlists often require the original page as Referer
+              referer: values.url,
+            },
+            { timeout: 45_000 },
+          );
           setProbe(probeRes.data.result);
           const first = probeRes.data.result.variants[0];
           if (first) setSelected(first.url);
         } catch {
           // keep selected m3u8
-        } finally {
-          setProbing(false);
         }
         const via =
           r.source === "browser"
@@ -115,9 +168,13 @@ export function ExtractForm() {
         (error as { response?: { data?: { error?: string } } })?.response?.data
           ?.error ||
         (error instanceof Error ? error.message : "Extract failed");
-      toast.error(msg);
+      toast.error(msg, {
+        description:
+          "Some sites drop TLS randomly — wait for the loader, or try Extract once more.",
+        duration: 8_000,
+      });
     } finally {
-      setExtracting(false);
+      setPhase("idle");
     }
   };
 
@@ -135,6 +192,8 @@ export function ExtractForm() {
         url: selected,
         format: format || "mp4",
         resolution: variant?.label ?? null,
+        // Critical for CDN streams (phncdn etc.): Referer must be the page
+        referer: pageUrl || result?.pageUrl || null,
       });
       toast.success("Download queued", { description: finalTitle });
     } catch (error) {
@@ -163,6 +222,8 @@ export function ExtractForm() {
       ? probe.variants.map((v) => ({ url: v.url, label: v.label }))
       : (result?.candidates ?? []).map((c) => ({ url: c, label: c }));
 
+  const statusText = phaseLabel(phase, deepMode, elapsed);
+
   return (
     <div className="space-y-6">
       <motion.div
@@ -182,7 +243,8 @@ export function ExtractForm() {
               (Python). With <em>Deep JS scrape</em> enabled, a headless Chromium
               loads the page like a real browser: executes JS, walks iframes, and
               intercepts network <span className="font-mono">.m3u8</span> requests
-              — no client-side iframe (that hits CORS).
+              — no client-side iframe (that hits CORS). Flaky TLS is{" "}
+              <strong>auto-retried</strong> so you usually only need one click.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -197,15 +259,19 @@ export function ExtractForm() {
                       className="pl-9 font-mono text-sm"
                       placeholder="https://example.com/watch/… or …/playlist.m3u8"
                       autoComplete="off"
+                      disabled={extracting}
                       {...register("url")}
                     />
                   </div>
-                  <Button type="submit" disabled={extracting}>
-                    {extracting
-                      ? deepMode
-                        ? "Deep scraping (JS)…"
-                        : "Extracting…"
-                      : "Extract"}
+                  <Button type="submit" disabled={extracting} className="min-w-[9.5rem]">
+                    {extracting ? (
+                      <>
+                        <FiLoader className="mr-2 h-4 w-4 animate-spin" />
+                        Working…
+                      </>
+                    ) : (
+                      "Extract"
+                    )}
                   </Button>
                 </div>
                 {errors.url && (
@@ -218,6 +284,7 @@ export function ExtractForm() {
                   type="checkbox"
                   className="mt-1"
                   checked={deepMode}
+                  disabled={extracting}
                   onChange={(e) => setDeepMode(e.target.checked)}
                 />
                 <span>
@@ -225,10 +292,49 @@ export function ExtractForm() {
                   <span className="mt-0.5 block text-xs text-muted-foreground">
                     Uses headless Chromium on the server to catch streams injected
                     by JavaScript players, XHR/fetch, and nested iframes. Slower
-                    (~15–60s) but much more complete.
+                    (~15–90s with retries) but much more complete.
                   </span>
                 </span>
               </label>
+
+              {extracting && (
+                <div
+                  className="flex items-start gap-3 rounded-xl border border-primary/25 bg-primary/5 p-4"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <FiLoader className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-primary" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium">{statusText}</p>
+                      <Badge variant="secondary" className="font-mono text-xs">
+                        {formatElapsed(elapsed)}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {phase === "probing" ? "probe" : deepMode ? "deep" : "static"}
+                      </Badge>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                      <motion.div
+                        className="h-full rounded-full bg-primary/80"
+                        initial={{ width: "8%" }}
+                        animate={{
+                          width:
+                            phase === "probing"
+                              ? "92%"
+                              : `${Math.min(88, 12 + elapsed * 1.4)}%`,
+                        }}
+                        transition={{ ease: "easeOut", duration: 0.35 }}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Please wait — the server retries TLS resets automatically
+                      (no need to mash Extract). Typical wait: 10–60s on picky
+                      sites.
+                    </p>
+                  </div>
+                </div>
+              )}
             </form>
           </CardContent>
         </Card>
@@ -268,13 +374,14 @@ export function ExtractForm() {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Video title"
+                  disabled={extracting}
                 />
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <FormatSelect value={format} onChange={setFormat} id="ex-format" />
                 <ResolutionPicker
-                  loading={probing}
+                  loading={phase === "probing"}
                   variants={probe?.variants ?? []}
                   selectedUrl={selected}
                   onSelect={setSelected}

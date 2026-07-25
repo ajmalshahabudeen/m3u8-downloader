@@ -3,6 +3,7 @@
 
 Usage:
   python download_stream.py --url URL --output /path/out.mp4 --format mp4
+  python download_stream.py --url URL --output out.mp4 --referer https://site.com/watch/1
 
 Stderr protocol:
   STAGE <code> <human label>
@@ -21,6 +22,14 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+from stream_headers import (
+    DEFAULT_UA,
+    browser_headers,
+    explain_http_error,
+    ffmpeg_header_args,
+    origin_from_url,
+)
 
 PROGRESS_RE = re.compile(r"(\d{1,3})%")
 TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
@@ -108,7 +117,6 @@ def run_cmd(cmd: list[str], timeout: int, progress_base: int = 0, progress_span:
             if time.time() - start > timeout:
                 proc.kill()
                 raise TimeoutError(f"Timed out after {timeout}s")
-            # keep last lines for error diagnostics
             cleaned = line.rstrip()
             if cleaned:
                 tail.append(cleaned)
@@ -124,7 +132,7 @@ def run_cmd(cmd: list[str], timeout: int, progress_base: int = 0, progress_span:
         raise
     if code != 0:
         detail = " | ".join(tail[-8:]) if tail else "no output"
-        raise RuntimeError(f"{cmd[0]} exited with code {code}: {detail}")
+        raise RuntimeError(explain_http_error(f"{cmd[0]} exited with code {code}: {detail}"))
 
 
 def ffmpeg_copy_args(fmt: str) -> list[str]:
@@ -150,7 +158,6 @@ def ffmpeg_fallback_args(fmt: str) -> list[str]:
         return ffmpeg_copy_args(fmt)
     if fmt == "webm":
         return ffmpeg_copy_args(fmt)
-    # re-encode safely
     return [
         "-c:v",
         "libx264",
@@ -167,8 +174,8 @@ def ffmpeg_fallback_args(fmt: str) -> list[str]:
     ]
 
 
-def download_ffmpeg(bin_path: str, url: str, output: str, fmt: str, timeout: int) -> None:
-    common = [
+def ffmpeg_input_prefix(bin_path: str, url: str, referer: str | None) -> list[str]:
+    return [
         bin_path,
         "-nostdin",
         "-y",
@@ -183,9 +190,21 @@ def download_ffmpeg(bin_path: str, url: str, output: str, fmt: str, timeout: int
         "1",
         "-reconnect_delay_max",
         "5",
+        *ffmpeg_header_args(url, referer=referer),
         "-i",
         url,
     ]
+
+
+def download_ffmpeg(
+    bin_path: str,
+    url: str,
+    output: str,
+    fmt: str,
+    timeout: int,
+    referer: str | None = None,
+) -> None:
+    common = ffmpeg_input_prefix(bin_path, url, referer)
 
     emit_stage("probing", "Probing stream")
     emit_progress(2)
@@ -218,17 +237,26 @@ def download_via_m3u8_then_convert(
     output: str,
     fmt: str,
     timeout: int,
+    referer: str | None = None,
 ) -> None:
     emit_stage("extracting", "Extracting playlist")
     emit_progress(3)
     emit_stage("downloading", "Downloading with m3u8downloader")
 
+    headers = browser_headers(url, referer=referer)
+    ua = headers.get("User-Agent", DEFAULT_UA)
+    origin = headers.get("Origin") or (origin_from_url(referer) if referer else None)
+
     with tempfile.TemporaryDirectory(prefix="m3u8dl_") as tmp:
         tmp_out = str(Path(tmp) / "raw.ts")
-        # m3u8downloader usually writes mp4/ts based on extension
         if fmt == "mp4" and not ffmpeg_bin:
             tmp_out = output
-        run_cmd([m3u8_bin, "-o", tmp_out, url], timeout, 5, 70)
+
+        cmd = [m3u8_bin, "--user-agent", ua]
+        if origin:
+            cmd.extend(["--origin", origin.rstrip("/")])
+        cmd.extend(["-o", tmp_out, url])
+        run_cmd(cmd, timeout, 5, 70)
 
         if tmp_out == output:
             emit_stage("finalizing", "Finalizing file")
@@ -236,7 +264,6 @@ def download_via_m3u8_then_convert(
             return
 
         if not ffmpeg_bin:
-            # move as-is
             shutil.move(tmp_out, output)
             emit_stage("finalizing", "Finalizing file")
             return
@@ -248,7 +275,7 @@ def download_via_m3u8_then_convert(
         else:
             emit_stage("converting", f"Packaging as {fmt.upper()}")
 
-        cmd = [
+        pack = [
             ffmpeg_bin,
             "-nostdin",
             "-y",
@@ -261,11 +288,11 @@ def download_via_m3u8_then_convert(
             output,
         ]
         try:
-            run_cmd(cmd, max(60, timeout // 3), 75, 20)
+            run_cmd(pack, max(60, timeout // 3), 75, 20)
         except Exception:
             if Path(output).exists():
                 Path(output).unlink(missing_ok=True)
-            cmd = [
+            pack = [
                 ffmpeg_bin,
                 "-nostdin",
                 "-y",
@@ -277,7 +304,7 @@ def download_via_m3u8_then_convert(
                 *ffmpeg_fallback_args(fmt),
                 output,
             ]
-            run_cmd(cmd, max(60, timeout // 3), 75, 20)
+            run_cmd(pack, max(60, timeout // 3), 75, 20)
 
         emit_stage("finalizing", "Finalizing file")
         emit_progress(97)
@@ -288,6 +315,11 @@ def main() -> None:
     p.add_argument("--url", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--format", default="mp4")
+    p.add_argument(
+        "--referer",
+        default="",
+        help="Page URL / site origin for CDN Referer header",
+    )
     p.add_argument(
         "--prefer",
         choices=("ffmpeg", "downloadm3u8"),
@@ -306,6 +338,7 @@ def main() -> None:
     if out.exists():
         out.unlink()
 
+    referer = (args.referer or "").strip() or None
     ffmpeg = find_ffmpeg()
     m3u8 = find_downloadm3u8()
 
@@ -313,13 +346,13 @@ def main() -> None:
         emit_stage("queued", "Starting")
         if args.prefer == "downloadm3u8" and m3u8:
             download_via_m3u8_then_convert(
-                m3u8, ffmpeg, args.url, str(out), fmt, args.timeout
+                m3u8, ffmpeg, args.url, str(out), fmt, args.timeout, referer
             )
         elif ffmpeg:
-            download_ffmpeg(ffmpeg, args.url, str(out), fmt, args.timeout)
+            download_ffmpeg(ffmpeg, args.url, str(out), fmt, args.timeout, referer)
         elif m3u8:
             download_via_m3u8_then_convert(
-                m3u8, ffmpeg, args.url, str(out), fmt, args.timeout
+                m3u8, ffmpeg, args.url, str(out), fmt, args.timeout, referer
             )
         else:
             print(
@@ -349,7 +382,7 @@ def main() -> None:
     except Exception as e:  # noqa: BLE001
         if out.exists():
             out.unlink(missing_ok=True)
-        print(json.dumps({"ok": False, "error": str(e)}))
+        print(json.dumps({"ok": False, "error": explain_http_error(str(e))}))
         raise SystemExit(1)
 
 

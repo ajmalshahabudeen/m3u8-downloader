@@ -16,7 +16,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await probeStreamUrl(parsed.data.url);
+    const result = await probeStreamUrl(
+      parsed.data.url,
+      parsed.data.referer || null,
+    );
     return NextResponse.json({ result });
   } catch (error) {
     const message =

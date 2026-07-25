@@ -4,15 +4,20 @@ import { parseJsonStdout, runPython } from "@/lib/python-runner";
 type PythonProbe = ProbeResult & { error?: string };
 
 /** Server-side probe of m3u8 master/media playlists via Python. */
-export async function probeStreamUrl(inputUrl: string): Promise<ProbeResult> {
+export async function probeStreamUrl(
+  inputUrl: string,
+  referer?: string | null,
+): Promise<ProbeResult> {
   const url = inputUrl.trim();
   if (!url) throw new Error("Enter a valid URL");
 
-  const { code, stdout, stderr } = await runPython(
-    "probe_stream.py",
-    ["--url", url],
-    { timeoutMs: 45_000 },
-  );
+  const args = ["--url", url];
+  const ref = referer?.trim();
+  if (ref) args.push("--referer", ref);
+
+  const { code, stdout, stderr } = await runPython("probe_stream.py", args, {
+    timeoutMs: 45_000,
+  });
 
   let payload: PythonProbe;
   try {

@@ -11,6 +11,8 @@ export type CreateDownloadPayload = {
   url: string;
   format?: string;
   resolution?: string | null;
+  /** Original page URL for CDN Referer header */
+  referer?: string | null;
 };
 
 export async function fetchDownloads() {

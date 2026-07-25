@@ -27,6 +27,8 @@ export const downloadItemSchema = z.object({
     ),
   format: outputFormatSchema,
   resolution: z.string().trim().max(120).optional().nullable(),
+  /** Original page URL — sent as Referer when hitting CDN-protected streams */
+  referer: z.string().trim().url().optional().nullable().or(z.literal("")),
 });
 
 export const singleDownloadSchema = downloadItemSchema;
@@ -40,6 +42,7 @@ export const batchDownloadSchema = z.object({
 
 export const probeSchema = z.object({
   url: z.string().trim().url("Enter a valid URL"),
+  referer: z.string().trim().url().optional().nullable().or(z.literal("")),
 });
 
 export type DownloadItemInput = z.infer<typeof downloadItemSchema>;

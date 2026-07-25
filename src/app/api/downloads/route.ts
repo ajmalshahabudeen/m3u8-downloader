@@ -40,6 +40,7 @@ export async function POST(request: Request) {
             data: {
               title: item.title,
               url: item.url,
+              referer: item.referer?.trim() || null,
               format: item.format ?? "mp4",
               resolution: item.resolution || null,
               status: "PENDING",
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
       data: {
         title: parsed.data.title,
         url: parsed.data.url,
+        referer: parsed.data.referer?.trim() || null,
         format: parsed.data.format ?? "mp4",
         resolution: parsed.data.resolution || null,
         status: "PENDING",
