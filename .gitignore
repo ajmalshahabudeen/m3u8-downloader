@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
+
+# App data
+/downloads
+/prisma/*.db
+/prisma/*.db-journal
+/src/generated
+
+# Launcher build fingerprint (old vs new code detection)
+.docker-build-fingerprint

@@ -1,0 +1,44 @@
+// Prisma schema for m3u8-downloader
+// https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum DownloadStatus {
+  PENDING
+  PROBING
+  EXTRACTING
+  DOWNLOADING
+  COMBINING
+  CONVERTING
+  FINALIZING
+  COMPLETED
+  FAILED
+}
+
+model Download {
+  id         String         @id @default(cuid())
+  title      String
+  url        String
+  format     String         @default("mp4")
+  resolution String?
+  status     DownloadStatus @default(PENDING)
+  stage      String         @default("queued")
+  stageLabel String         @default("Queued")
+  progress   Int            @default(0)
+  fileName   String?
+  filePath   String?
+  error      String?
+  fileSize   Int?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}

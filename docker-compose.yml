@@ -1,0 +1,43 @@
+services:
+  m3u8-downloader:
+    build: .
+    container_name: m3u8-downloader
+    ports:
+      # Uncommon host/container port to avoid clashes with typical Next/dev services
+      - "38478:38478"
+    environment:
+      DATABASE_URL: file:/app/data/prod.db
+      DOWNLOADS_DIR: /app/downloads
+      PORT: "38478"
+      HOSTNAME: "0.0.0.0"
+      # ffmpeg is preferred (reliable with master playlists). Set to downloadm3u8 for the Python CLI.
+      DOWNLOADER: ffmpeg
+      DOWNLOADM3U8_BIN: /usr/local/bin/downloadm3u8
+      PYTHON_BIN: python3
+      PYTHON_SCRIPTS_DIR: /app/python
+      MAX_CONCURRENT_DOWNLOADS: "2"
+      DOWNLOAD_TIMEOUT_MS: "1800000"
+      NODE_ENV: production
+    labels:
+      # Set by run.sh / run.bat so launchers can detect stale containers
+      com.m3u8.fingerprint: "${M3U8_BUILD_FINGERPRINT:-unknown}"
+    volumes:
+      - m3u8-data:/app/data
+      - m3u8-downloads:/app/downloads
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:38478/api/downloads').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+volumes:
+  m3u8-data:
+  m3u8-downloads:
