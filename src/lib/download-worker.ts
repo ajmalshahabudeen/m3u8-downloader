@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { prisma } from "@/lib/prisma";
 import { buildOutputPath } from "@/lib/paths";
 import { parseJsonStdout, runPython } from "@/lib/python-runner";
+import { enqueueDownloadJobs } from "@/lib/queue";
 import type { DownloadStatus } from "@/types/download";
 
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_DOWNLOADS ?? 2);
@@ -9,6 +10,8 @@ const DOWNLOAD_TIMEOUT_MS = Number(
   process.env.DOWNLOAD_TIMEOUT_MS ?? 30 * 60 * 1000,
 );
 const DOWNLOADER_PREF = (process.env.DOWNLOADER ?? "ffmpeg").toLowerCase();
+/** Prefer Redis/Celery workers. Set QUEUE_BACKEND=inline to force in-process. */
+const QUEUE_BACKEND = (process.env.QUEUE_BACKEND ?? "celery").toLowerCase();
 
 let active = 0;
 let pumping = false;
@@ -47,7 +50,8 @@ async function setStage(
   });
 }
 
-async function processDownload(id: string) {
+/** In-process fallback when Redis/Celery is unavailable. */
+async function processDownloadInline(id: string) {
   const download = await prisma.download.findUnique({ where: { id } });
   if (!download) return;
 
@@ -61,7 +65,7 @@ async function processDownload(id: string) {
     data: {
       status: "PROBING",
       stage: "probing",
-      stageLabel: "Probing stream",
+      stageLabel: "Probing stream (inline)",
       progress: 1,
       fileName,
       filePath,
@@ -78,7 +82,7 @@ async function processDownload(id: string) {
     const referer = download.referer?.trim() || "";
 
     console.log(
-      `[download] id=${id} format=${download.format} res=${download.resolution ?? "auto"} referer=${referer ? "yes" : "auto"} via python prefer=${prefer}`,
+      `[download:inline] id=${id} format=${download.format} prefer=${prefer}`,
     );
 
     const pyArgs = [
@@ -163,7 +167,7 @@ async function processDownload(id: string) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown download error";
-    console.error(`[download] failed id=${id}:`, message);
+    console.error(`[download:inline] failed id=${id}:`, message);
 
     if (fs.existsSync(filePath)) {
       try {
@@ -186,7 +190,7 @@ async function processDownload(id: string) {
   }
 }
 
-export async function pumpDownloadQueue() {
+async function pumpInlineQueue() {
   if (pumping) return;
   pumping = true;
 
@@ -206,7 +210,7 @@ export async function pumpDownloadQueue() {
         data: {
           status: "PROBING",
           stage: "probing",
-          stageLabel: "Starting…",
+          stageLabel: "Starting (inline)…",
           progress: 1,
         },
       });
@@ -214,13 +218,13 @@ export async function pumpDownloadQueue() {
       if (claimed.count === 0) continue;
 
       active += 1;
-      void processDownload(next.id)
+      void processDownloadInline(next.id)
         .catch((err) => {
-          console.error("Download worker error", err);
+          console.error("Inline download worker error", err);
         })
         .finally(() => {
           active -= 1;
-          void pumpDownloadQueue();
+          void pumpInlineQueue();
         });
     }
   } finally {
@@ -228,6 +232,51 @@ export async function pumpDownloadQueue() {
   }
 }
 
+/**
+ * Enqueue pending downloads onto Celery/Redis workers (process-isolated).
+ * Falls back to in-process pump if broker is down or QUEUE_BACKEND=inline.
+ */
+export async function pumpDownloadQueue() {
+  if (QUEUE_BACKEND === "inline") {
+    await pumpInlineQueue();
+    return;
+  }
+
+  const pending = await prisma.download.findMany({
+    where: { status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+    select: { id: true },
+  });
+
+  if (pending.length === 0) return;
+
+  const ids = pending.map((p) => p.id);
+  const result = await enqueueDownloadJobs(ids);
+
+  if (result.ok) {
+    console.log(
+      `[queue] enqueued ${result.tasks.length} job(s) via Celery/Redis`,
+    );
+    // Mark stage label so UI shows they're waiting on the worker pool
+    await prisma.download.updateMany({
+      where: { id: { in: ids }, status: "PENDING" },
+      data: {
+        stage: "queued",
+        stageLabel: "Queued on worker…",
+      },
+    });
+    return;
+  }
+
+  console.warn(
+    `[queue] Celery enqueue failed (${result.error}) — falling back to inline workers`,
+  );
+  await pumpInlineQueue();
+}
+
 export function enqueueDownloads() {
-  void pumpDownloadQueue();
+  void pumpDownloadQueue().catch((err) => {
+    console.error("[queue] pump failed", err);
+  });
 }

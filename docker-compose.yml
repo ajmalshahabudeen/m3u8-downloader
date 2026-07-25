@@ -1,4 +1,18 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: m3u8-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - m3u8-redis:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
   m3u8-downloader:
     build: .
     container_name: m3u8-downloader
@@ -10,7 +24,6 @@ services:
       DOWNLOADS_DIR: /app/downloads
       PORT: "38478"
       HOSTNAME: "0.0.0.0"
-      # ffmpeg is preferred (reliable with master playlists). Set to downloadm3u8 for the Python CLI.
       DOWNLOADER: ffmpeg
       DOWNLOADM3U8_BIN: /usr/local/bin/downloadm3u8
       PYTHON_BIN: python3
@@ -18,8 +31,13 @@ services:
       MAX_CONCURRENT_DOWNLOADS: "2"
       DOWNLOAD_TIMEOUT_MS: "1800000"
       NODE_ENV: production
+      # Redis + Celery queue (process-isolated workers)
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_BACKEND: celery
+    depends_on:
+      redis:
+        condition: service_healthy
     labels:
-      # Set by run.sh / run.bat so launchers can detect stale containers
       com.m3u8.fingerprint: "${M3U8_BUILD_FINGERPRINT:-unknown}"
     volumes:
       - m3u8-data:/app/data
@@ -38,6 +56,41 @@ services:
       retries: 12
       start_period: 45s
 
+  # Dedicated Celery workers — prefork = one OS process per concurrent job
+  worker:
+    build: .
+    container_name: m3u8-worker
+    entrypoint: ["/bin/sh", "/app/python/worker-entrypoint.sh"]
+    environment:
+      DATABASE_URL: file:/app/data/prod.db
+      DOWNLOADS_DIR: /app/downloads
+      DOWNLOADER: ffmpeg
+      DOWNLOADM3U8_BIN: /usr/local/bin/downloadm3u8
+      PYTHON_BIN: python3
+      PYTHON_SCRIPTS_DIR: /app/python
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      APP_ROOT: /app
+      REDIS_URL: redis://redis:6379/0
+      WORKER_CONCURRENCY: "3"
+      WORKER_MAX_TASKS_PER_CHILD: "25"
+      TASK_SOFT_TIME_LIMIT: "1800"
+      TASK_TIME_LIMIT: "1900"
+      CELERY_QUEUES: downloads,extracts
+      CELERY_LOGLEVEL: INFO
+      DOWNLOAD_TIMEOUT_MS: "1800000"
+      NODE_ENV: production
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # Share SQLite + downloads with the web app
+      - m3u8-data:/app/data
+      - m3u8-downloads:/app/downloads
+    restart: unless-stopped
+    # Scale with: docker compose up -d --scale worker=2
+    # (use unique hostnames; celery hostname already includes %h)
+
 volumes:
   m3u8-data:
   m3u8-downloads:
+  m3u8-redis:

@@ -69,5 +69,22 @@ if ! npx prisma db push --accept-data-loss; then
   npx prisma db push || echo "⚠ schema sync failed"
 fi
 
+echo "→ Ensuring SQLite WAL mode (multi-worker safe)..."
+python3 - <<'PY'
+import os, sqlite3
+from pathlib import Path
+url = os.environ.get("DATABASE_URL", "file:/app/data/prod.db")
+path = url[5:] if url.startswith("file:") else url
+Path(path).parent.mkdir(parents=True, exist_ok=True)
+if Path(path).exists():
+    c = sqlite3.connect(path, timeout=30)
+    mode = c.execute("PRAGMA journal_mode=WAL").fetchone()
+    c.execute("PRAGMA busy_timeout=30000")
+    c.close()
+    print(f"  journal_mode={mode[0] if mode else '?'}")
+else:
+    print("  db will be created by migrations")
+PY
+
 echo "→ Starting Next.js..."
 exec "$@"

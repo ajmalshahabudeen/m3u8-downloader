@@ -66,7 +66,9 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     PYTHON_BIN=python3 \
     PYTHON_SCRIPTS_DIR=/app/python \
     MAX_CONCURRENT_DOWNLOADS=2 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    REDIS_URL=redis://redis:6379/0 \
+    QUEUE_BACKEND=celery
 
 FROM base AS deps
 COPY package.json package-lock.json ./
@@ -109,7 +111,8 @@ COPY --from=builder /app/python ./python
 COPY --from=builder /app/docker-entrypoint.sh ./docker-entrypoint.sh
 
 RUN chmod +x /app/docker-entrypoint.sh \
-  && chmod +x /app/python/*.py || true
+  && chmod +x /app/python/*.py /app/python/worker-entrypoint.sh 2>/dev/null || true \
+  && chmod +x /app/python/worker/*.py 2>/dev/null || true
 
 EXPOSE 38478
 VOLUME ["/app/data", "/app/downloads"]

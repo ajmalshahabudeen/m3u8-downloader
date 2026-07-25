@@ -47,7 +47,8 @@ export function getPythonBin() {
 export type PythonScriptName =
   | "extract_stream.py"
   | "download_stream.py"
-  | "probe_stream.py";
+  | "probe_stream.py"
+  | "enqueue_job.py";
 
 export function getPythonScript(name: PythonScriptName) {
   const overrideDir = process.env.PYTHON_SCRIPTS_DIR;

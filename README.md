@@ -14,7 +14,7 @@ downloadm3u8 -o output.mp4 "https://…/playlist.m3u8"
 - **Batch downloads** (`/batch`) — table UI for multiple jobs
 - **From URL** (`/extract`) — paste a video page URL; auto-fetch title + m3u8 when present
 - **Prisma + SQLite** job history and status
-- **Background queue** (up to `MAX_CONCURRENT_DOWNLOADS`)
+- **Background queue** — **Redis + Celery** process-isolated workers (prefork); parallel downloads without hanging the Next.js process
 - **shadcn/ui** components + Magic UI-style grid background & animated theme toggle
 - **axios · zustand · motion · react-hook-form · react-icons**
 
@@ -24,10 +24,11 @@ downloadm3u8 -o output.mp4 "https://…/playlist.m3u8"
 |--------|------|
 | UI | Next.js (App Router), Tailwind v4, shadcn/ui |
 | State | Zustand + axios polling |
-| DB | Prisma 7 + SQLite (`better-sqlite3` adapter) |
-| Downloader | **Python** `download_stream.py` (`ffmpeg` / `downloadm3u8`) |
-| Extract | **Python** `extract_stream.py` (requests + BeautifulSoup) |
-| Deploy | Docker / Docker Compose |
+| DB | Prisma 7 + SQLite (`better-sqlite3` adapter, WAL for multi-worker) |
+| Queue | **Redis 7** + **Celery 5** (prefork pool, late ack, time limits) |
+| Downloader | **Python** `download_stream.py` (`ffmpeg` / `downloadm3u8`) in isolated child processes |
+| Extract | **Python** `extract_stream.py` (requests + BeautifulSoup + Playwright) |
+| Deploy | Docker / Docker Compose (`web` + `redis` + `worker`) |
 
 ## Quick start (Docker)
 
