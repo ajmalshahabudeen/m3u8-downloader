@@ -98,19 +98,16 @@ export function ExtractForm() {
 
   // Elapsed timer while extract/probe is running
   useEffect(() => {
-    if (!extracting) {
-      setElapsed(0);
-      return;
-    }
-    setElapsed(0);
+    if (!extracting) return;
     const started = Date.now();
     const id = window.setInterval(() => {
       setElapsed(Math.floor((Date.now() - started) / 1000));
     }, 250);
     return () => window.clearInterval(id);
-  }, [extracting, phase]);
+  }, [extracting]);
 
   const onExtract = async (values: FormValues) => {
+    setElapsed(0);
     setPhase("extracting");
     setResult(null);
     setProbe(null);

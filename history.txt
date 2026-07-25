@@ -1,0 +1,1 @@
+[2026-07-26 03:08] Answered question regarding TLS/SSLError log retries and why extract form shows multiple files for a split second before collapsing to one file (due to initial extract candidates list being replaced by probed stream variants).

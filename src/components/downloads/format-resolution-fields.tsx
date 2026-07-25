@@ -54,9 +54,6 @@ export function useStreamProbe(url: string) {
   useEffect(() => {
     const trimmed = url.trim();
     if (!trimmed || !trimmed.startsWith("http")) {
-      setProbe(null);
-      setSelectedUrl(null);
-      setError(null);
       return;
     }
 
@@ -88,7 +85,14 @@ export function useStreamProbe(url: string) {
     return () => clearTimeout(t);
   }, [url]);
 
-  return { loading, probe, error, selectedUrl, setSelectedUrl };
+  const valid = url.trim().startsWith("http");
+  return {
+    loading: valid ? loading : false,
+    probe: valid ? probe : null,
+    error: valid ? error : null,
+    selectedUrl: valid ? selectedUrl : null,
+    setSelectedUrl,
+  };
 }
 
 export function ResolutionPicker({
