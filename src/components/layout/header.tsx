@@ -27,8 +27,57 @@ export function Header() {
             href="/"
             className="flex shrink-0 items-center gap-2 font-semibold tracking-tight"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary font-heading text-sm text-primary-foreground">
-              M8
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-slate-950 via-indigo-950 to-indigo-900 border border-indigo-500/40 shadow-sm">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="shrink-0"
+              >
+                <path
+                  d="M3 5.5C3 4.6 4 4.1 4.8 4.6L11.2 9.1C11.9 9.6 11.9 10.7 11.2 11.1L4.8 15.6C4 16.1 3 15.6 3 14.7V5.5Z"
+                  fill="url(#hdr-gradient-play)"
+                />
+                <path
+                  d="M17 4V13M17 13L13.5 9.5M17 13L20.5 9.5"
+                  stroke="url(#hdr-gradient-arrow)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M13.5 17H20.5"
+                  stroke="url(#hdr-gradient-arrow)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                />
+                <defs>
+                  <linearGradient
+                    id="hdr-gradient-play"
+                    x1="3"
+                    y1="4.6"
+                    x2="11.2"
+                    y2="15.6"
+                    gradientUnits="userSpaceOnUse"
+                  >
+                    <stop stopColor="#6366F1" />
+                    <stop offset="1" stopColor="#A855F7" />
+                  </linearGradient>
+                  <linearGradient
+                    id="hdr-gradient-arrow"
+                    x1="17"
+                    y1="4"
+                    x2="17"
+                    y2="17"
+                    gradientUnits="userSpaceOnUse"
+                  >
+                    <stop stopColor="#38BDF8" />
+                    <stop offset="1" stopColor="#6366F1" />
+                  </linearGradient>
+                </defs>
+              </svg>
             </span>
             <span className="hidden font-heading sm:inline">m3u8 Downloader</span>
           </Link>

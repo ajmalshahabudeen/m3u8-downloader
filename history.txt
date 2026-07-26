@@ -1,1 +1,2 @@
 [2026-07-26 03:08] Answered question regarding TLS/SSLError log retries and why extract form shows multiple files for a split second before collapsing to one file (due to initial extract candidates list being replaced by probed stream variants).
+[2026-07-26 20:15] Removed legacy favicon.ico, created new dynamic icon.tsx (32x32) & apple-icon.tsx (180x180) with a modern HLS stream play & download emblem, and updated header logo badge to match.
