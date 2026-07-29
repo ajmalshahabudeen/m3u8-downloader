@@ -38,9 +38,22 @@ model Download {
   filePath   String?
   error      String?
   fileSize   Int?
+  /// Job kind: hls | all_video
+  jobType    String         @default("hls")
+  /// Backend engine: ffmpeg | downloadm3u8 | ytdlp | direct | extract_hls
+  engine     String?
+  /// yt-dlp extractor key or classifier engine id
+  extractor  String?
+  /// Optional absolute path to Netscape cookies.txt for this job
+  cookiePath String?
+  /// Download playlist entries (yt-dlp); default single item
+  playlist   Boolean        @default(false)
+  /// yt-dlp format selector e.g. bv*+ba/b or best[height<=1080]
+  ytdlpFormat String?
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt
 
   @@index([status])
   @@index([createdAt])
+  @@index([jobType])
 }

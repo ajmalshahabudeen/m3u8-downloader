@@ -6,6 +6,7 @@ import {
   HiOutlineDownload,
   HiOutlineViewGridAdd,
   HiOutlineSearchCircle,
+  HiOutlineGlobeAlt,
 } from "react-icons/hi";
 import { AnimatedThemeToggler } from "@/components/magic-ui/animated-theme-toggler";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,11 @@ const links = [
   { href: "/", label: "Single Download", icon: HiOutlineDownload },
   { href: "/batch", label: "Batch Downloads", icon: HiOutlineViewGridAdd },
   { href: "/extract", label: "From URL", icon: HiOutlineSearchCircle },
+  {
+    href: "/all-video-downloader",
+    label: "All Video",
+    icon: HiOutlineGlobeAlt,
+  },
 ];
 
 export function Header() {

@@ -10,7 +10,6 @@ const DOWNLOAD_TIMEOUT_MS = Number(
   process.env.DOWNLOAD_TIMEOUT_MS ?? 30 * 60 * 1000,
 );
 const DOWNLOADER_PREF = (process.env.DOWNLOADER ?? "ffmpeg").toLowerCase();
-/** Prefer Redis/Celery workers. Set QUEUE_BACKEND=inline to force in-process. */
 const QUEUE_BACKEND = (process.env.QUEUE_BACKEND ?? "celery").toLowerCase();
 
 let active = 0;
@@ -50,8 +49,7 @@ async function setStage(
   });
 }
 
-/** In-process fallback when Redis/Celery is unavailable. */
-async function processDownloadInline(id: string) {
+async function processHlsInline(id: string) {
   const download = await prisma.download.findUnique({ where: { id } });
   if (!download) return;
 
@@ -77,17 +75,9 @@ async function processDownloadInline(id: string) {
     let lastProgress = 1;
     const prefer =
       DOWNLOADER_PREF === "downloadm3u8" ? "downloadm3u8" : "ffmpeg";
-
-    const streamUrl = download.url;
-    const referer = download.referer?.trim() || "";
-
-    console.log(
-      `[download:inline] id=${id} format=${download.format} prefer=${prefer}`,
-    );
-
     const pyArgs = [
       "--url",
-      streamUrl,
+      download.url,
       "--output",
       filePath,
       "--format",
@@ -97,8 +87,8 @@ async function processDownloadInline(id: string) {
       "--timeout",
       String(Math.max(60, Math.floor(DOWNLOAD_TIMEOUT_MS / 1000))),
     ];
-    if (referer) {
-      pyArgs.push("--referer", referer);
+    if (download.referer?.trim()) {
+      pyArgs.push("--referer", download.referer.trim());
     }
 
     const { code, stdout, stderr } = await runPython(
@@ -109,9 +99,7 @@ async function processDownloadInline(id: string) {
         onStderrLine: (line) => {
           const stageMatch = line.match(/^STAGE\s+(\S+)\s+(.+)$/i);
           if (stageMatch) {
-            const stage = stageMatch[1].toLowerCase();
-            const label = stageMatch[2].trim();
-            void setStage(id, stage, label).catch(() => undefined);
+            void setStage(id, stageMatch[1].toLowerCase(), stageMatch[2].trim());
             return;
           }
           const m = line.match(/^PROGRESS\s+(\d+)/i);
@@ -120,10 +108,7 @@ async function processDownloadInline(id: string) {
           if (!Number.isFinite(next) || next <= lastProgress) return;
           lastProgress = next;
           void prisma.download
-            .update({
-              where: { id },
-              data: { progress: next },
-            })
+            .update({ where: { id }, data: { progress: next } })
             .catch(() => undefined);
         },
       },
@@ -137,19 +122,12 @@ async function processDownloadInline(id: string) {
         stderr.trim() || `download_stream.py invalid JSON (exit ${code})`,
       );
     }
-
-    if (!result.ok) {
-      throw new Error(result.error || "Download failed");
-    }
-
+    if (!result.ok) throw new Error(result.error || "Download failed");
     if (!fs.existsSync(filePath)) {
       throw new Error("Download finished but output file was not created");
     }
-
     const stats = fs.statSync(filePath);
-    if (stats.size <= 0) {
-      throw new Error("Download finished with empty output file");
-    }
+    if (stats.size <= 0) throw new Error("Empty output file");
 
     await prisma.download.update({
       where: { id },
@@ -167,16 +145,146 @@ async function processDownloadInline(id: string) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown download error";
-    console.error(`[download:inline] failed id=${id}:`, message);
-
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);
       } catch {
-        // ignore
+        /* ignore */
       }
     }
+    await prisma.download.update({
+      where: { id },
+      data: {
+        status: "FAILED",
+        stage: "failed",
+        stageLabel: "Failed",
+        progress: 0,
+        error: message,
+      },
+    });
+  }
+}
 
+async function processAllVideoInline(id: string) {
+  const download = await prisma.download.findUnique({ where: { id } });
+  if (!download) return;
+
+  const { fileName, filePath } = buildOutputPath(
+    download.title,
+    download.format || "mp4",
+  );
+
+  await prisma.download.update({
+    where: { id },
+    data: {
+      status: "PROBING",
+      stage: "probing",
+      stageLabel: "Analyzing media (inline)",
+      progress: 1,
+      fileName,
+      filePath,
+      error: null,
+    },
+  });
+
+  try {
+    let lastProgress = 1;
+    const pyArgs = [
+      "--mode",
+      "download",
+      "--url",
+      download.url,
+      "--output",
+      filePath,
+      "--format",
+      download.format || "mp4",
+      "--quality",
+      download.resolution || "best",
+      "--engine",
+      download.engine || "auto",
+      "--timeout",
+      String(Math.max(60, Math.floor(DOWNLOAD_TIMEOUT_MS / 1000))),
+      "--no-ai",
+    ];
+    if (download.referer?.trim()) pyArgs.push("--referer", download.referer.trim());
+    if (download.cookiePath?.trim())
+      pyArgs.push("--cookies", download.cookiePath.trim());
+    if (download.playlist) pyArgs.push("--playlist");
+    if (download.ytdlpFormat?.trim())
+      pyArgs.push("--ytdlp-format", download.ytdlpFormat.trim());
+
+    const { code, stdout, stderr } = await runPython(
+      "all_video_download.py",
+      pyArgs,
+      {
+        timeoutMs: DOWNLOAD_TIMEOUT_MS + 30_000,
+        onStderrLine: (line) => {
+          const stageMatch = line.match(/^STAGE\s+(\S+)\s+(.+)$/i);
+          if (stageMatch) {
+            void setStage(id, stageMatch[1].toLowerCase(), stageMatch[2].trim());
+            return;
+          }
+          const m = line.match(/^PROGRESS\s+(\d+)/i);
+          if (!m) return;
+          const next = Number(m[1]);
+          if (!Number.isFinite(next) || next <= lastProgress) return;
+          lastProgress = next;
+          void prisma.download
+            .update({ where: { id }, data: { progress: next } })
+            .catch(() => undefined);
+        },
+      },
+    );
+
+    type AllRes = {
+      ok: boolean;
+      error?: string;
+      output?: string;
+      fileSize?: number;
+      engine?: string;
+      extractor?: string;
+      title?: string;
+    };
+    let result: AllRes;
+    try {
+      result = parseJsonStdout<AllRes>(stdout);
+    } catch {
+      throw new Error(
+        stderr.trim() || `all_video_download.py invalid JSON (exit ${code})`,
+      );
+    }
+    if (!result.ok) throw new Error(result.error || "Download failed");
+
+    const outPath = result.output || filePath;
+    if (!fs.existsSync(outPath)) {
+      throw new Error("Output file missing");
+    }
+    const stats = fs.statSync(outPath);
+    await prisma.download.update({
+      where: { id },
+      data: {
+        status: "COMPLETED",
+        stage: "completed",
+        stageLabel: "Completed",
+        progress: 100,
+        fileName: outPath.split(/[/\\]/).pop() || fileName,
+        filePath: outPath,
+        fileSize: result.fileSize || stats.size,
+        engine: result.engine || download.engine,
+        extractor: result.extractor || download.extractor,
+        error: null,
+      },
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown download error";
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {
+        /* ignore */
+      }
+    }
     await prisma.download.update({
       where: { id },
       data: {
@@ -193,16 +301,13 @@ async function processDownloadInline(id: string) {
 async function pumpInlineQueue() {
   if (pumping) return;
   pumping = true;
-
   try {
     while (true) {
       if (active >= MAX_CONCURRENT) break;
-
       const next = await prisma.download.findFirst({
         where: { status: "PENDING" },
         orderBy: { createdAt: "asc" },
       });
-
       if (!next) break;
 
       const claimed = await prisma.download.updateMany({
@@ -214,14 +319,15 @@ async function pumpInlineQueue() {
           progress: 1,
         },
       });
-
       if (claimed.count === 0) continue;
 
       active += 1;
-      void processDownloadInline(next.id)
-        .catch((err) => {
-          console.error("Inline download worker error", err);
-        })
+      const job =
+        next.jobType === "all_video"
+          ? processAllVideoInline(next.id)
+          : processHlsInline(next.id);
+      void job
+        .catch((err) => console.error("Inline worker error", err))
         .finally(() => {
           active -= 1;
           void pumpInlineQueue();
@@ -232,10 +338,6 @@ async function pumpInlineQueue() {
   }
 }
 
-/**
- * Enqueue pending downloads onto Celery/Redis workers (process-isolated).
- * Falls back to in-process pump if broker is down or QUEUE_BACKEND=inline.
- */
 export async function pumpDownloadQueue() {
   if (QUEUE_BACKEND === "inline") {
     await pumpInlineQueue();
@@ -246,33 +348,45 @@ export async function pumpDownloadQueue() {
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" },
     take: 50,
-    select: { id: true },
+    select: { id: true, jobType: true },
   });
-
   if (pending.length === 0) return;
 
-  const ids = pending.map((p) => p.id);
-  const result = await enqueueDownloadJobs(ids);
+  const hlsIds = pending.filter((p) => p.jobType !== "all_video").map((p) => p.id);
+  const allIds = pending.filter((p) => p.jobType === "all_video").map((p) => p.id);
 
-  if (result.ok) {
-    console.log(
-      `[queue] enqueued ${result.tasks.length} job(s) via Celery/Redis`,
-    );
-    // Mark stage label so UI shows they're waiting on the worker pool
-    await prisma.download.updateMany({
-      where: { id: { in: ids }, status: "PENDING" },
-      data: {
-        stage: "queued",
-        stageLabel: "Queued on worker…",
-      },
-    });
-    return;
+  let anyOk = false;
+  if (hlsIds.length) {
+    const r = await enqueueDownloadJobs(hlsIds, "download");
+    if (r.ok) {
+      anyOk = true;
+      await prisma.download.updateMany({
+        where: { id: { in: hlsIds }, status: "PENDING" },
+        data: { stage: "queued", stageLabel: "Queued on worker…" },
+      });
+      console.log(`[queue] enqueued ${hlsIds.length} HLS job(s)`);
+    } else {
+      console.warn(`[queue] HLS enqueue failed: ${r.error}`);
+    }
+  }
+  if (allIds.length) {
+    const r = await enqueueDownloadJobs(allIds, "all-video");
+    if (r.ok) {
+      anyOk = true;
+      await prisma.download.updateMany({
+        where: { id: { in: allIds }, status: "PENDING" },
+        data: { stage: "queued", stageLabel: "Queued on worker…" },
+      });
+      console.log(`[queue] enqueued ${allIds.length} all-video job(s)`);
+    } else {
+      console.warn(`[queue] all-video enqueue failed: ${r.error}`);
+    }
   }
 
-  console.warn(
-    `[queue] Celery enqueue failed (${result.error}) — falling back to inline workers`,
-  );
-  await pumpInlineQueue();
+  if (!anyOk) {
+    console.warn("[queue] Celery unavailable — inline fallback");
+    await pumpInlineQueue();
+  }
 }
 
 export function enqueueDownloads() {

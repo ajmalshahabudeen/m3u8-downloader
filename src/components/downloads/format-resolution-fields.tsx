@@ -9,7 +9,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { OUTPUT_FORMATS, type ProbeResult, type StreamVariant } from "@/types/download";
@@ -134,26 +133,33 @@ export function ResolutionPicker({
     );
   }
 
+  const value =
+    selectedUrl && variants.some((v) => v.url === selectedUrl)
+      ? selectedUrl
+      : (variants[0]?.url ?? "");
+
   return (
     <div className="space-y-2">
-      <Label>Resolution / quality</Label>
-      <div className="flex flex-wrap gap-2">
-        {variants.map((v) => {
-          const active = selectedUrl === v.url;
-          return (
-            <Button
+      <Label htmlFor="resolution-picker">Resolution / quality</Label>
+      <Select
+        value={value}
+        onValueChange={(v) => onSelect(v)}
+      >
+        <SelectTrigger id="resolution-picker" className="w-full font-mono text-xs">
+          <SelectValue placeholder="Choose resolution" />
+        </SelectTrigger>
+        <SelectContent>
+          {variants.map((v) => (
+            <SelectItem
               key={v.id + v.url}
-              type="button"
-              size="sm"
-              variant={active ? "default" : "outline"}
-              onClick={() => onSelect(v.url)}
+              value={v.url}
               className="font-mono text-xs"
             >
               {v.label}
-            </Button>
-          );
-        })}
-      </div>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {error && <p className="text-xs text-muted-foreground">{error}</p>}
     </div>
   );

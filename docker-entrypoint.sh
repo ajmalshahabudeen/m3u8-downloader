@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-mkdir -p /app/data /app/downloads
+mkdir -p /app/data /app/downloads /app/data/cookies
 
 # Ensure SQLite file path exists for Prisma
 DB_PATH="${DATABASE_URL#file:}"
@@ -43,6 +43,18 @@ if "stageLabel" not in cols:
     alters.append("ALTER TABLE Download ADD COLUMN stageLabel TEXT NOT NULL DEFAULT 'Queued'")
 if "referer" not in cols:
     alters.append("ALTER TABLE Download ADD COLUMN referer TEXT")
+if "jobType" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN jobType TEXT NOT NULL DEFAULT 'hls'")
+if "engine" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN engine TEXT")
+if "extractor" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN extractor TEXT")
+if "cookiePath" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN cookiePath TEXT")
+if "playlist" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN playlist INTEGER NOT NULL DEFAULT 0")
+if "ytdlpFormat" not in cols:
+    alters.append("ALTER TABLE Download ADD COLUMN ytdlpFormat TEXT")
 for sql in alters:
     print(f"  + {sql}")
     cur.execute(sql)
@@ -60,6 +72,7 @@ if ! npx prisma migrate deploy; then
   # Recover from "duplicate column" after columns were added out-of-band
   npx prisma migrate resolve --applied 20260725200000_add_format_stage_resolution 2>/dev/null || true
   npx prisma migrate resolve --applied 20260726120000_add_referer 2>/dev/null || true
+  npx prisma migrate resolve --applied 20260726210000_all_video_fields 2>/dev/null || true
   npx prisma migrate deploy || true
 fi
 

@@ -3,7 +3,7 @@ import { parseJsonStdout, runPython } from "@/lib/python-runner";
 export type EnqueueDownloadResult =
   | {
       ok: true;
-      type: "download";
+      type: string;
       tasks: { downloadId: string; taskId: string }[];
       backend: "celery";
     }
@@ -11,17 +11,21 @@ export type EnqueueDownloadResult =
 
 /**
  * Push download job(s) onto Redis via Celery (process-isolated Python workers).
- * Returns ok:false if Redis/worker broker is unavailable — caller may fall back.
  */
 export async function enqueueDownloadJobs(
   ids: string | string[],
+  kind: "download" | "all-video" = "download",
 ): Promise<EnqueueDownloadResult> {
   const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
   if (list.length === 0) {
     return { ok: false, error: "No download ids" };
   }
 
-  const args = ["--type", "download", ...list.flatMap((id) => ["--id", id])];
+  const args = [
+    "--type",
+    kind,
+    ...list.flatMap((id) => ["--id", id]),
+  ];
 
   try {
     const { code, stdout, stderr } = await runPython("enqueue_job.py", args, {
@@ -43,7 +47,7 @@ export async function enqueueDownloadJobs(
     }
     return {
       ok: true,
-      type: "download",
+      type: kind,
       tasks: (payload as { tasks: { downloadId: string; taskId: string }[] })
         .tasks,
       backend: "celery",

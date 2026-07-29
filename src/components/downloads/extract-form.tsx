@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -276,23 +277,23 @@ export function ExtractForm() {
                 )}
               </div>
 
-              <label className="flex cursor-pointer items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={deepMode}
-                  disabled={extracting}
-                  onChange={(e) => setDeepMode(e.target.checked)}
-                />
-                <span>
-                  <span className="font-medium">Deep JS scrape (recommended)</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    Uses headless Chromium on the server to catch streams injected
-                    by JavaScript players, XHR/fetch, and nested iframes. Slower
-                    (~15–90s with retries) but much more complete.
-                  </span>
-                </span>
-              </label>
+              <div className="flex cursor-pointer items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm">
+                              <Checkbox
+                                id="deep-mode"
+                                className="mt-1"
+                                checked={deepMode}
+                                disabled={extracting}
+                                onCheckedChange={(v) => setDeepMode(v === true)}
+                              />
+                              <Label htmlFor="deep-mode" className="cursor-pointer font-normal">
+                                <span className="font-medium">Deep JS scrape (recommended)</span>
+                                <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                                  Uses headless Chromium on the server to catch streams injected
+                                  by JavaScript players, XHR/fetch, and nested iframes. Slower
+                                  (~15–90s with retries) but much more complete.
+                                </span>
+                              </Label>
+                            </div>
 
               {extracting && (
                 <div

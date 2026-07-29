@@ -97,6 +97,9 @@ def update_download(download_id: str, **fields: Any) -> None:
         "filePath",
         "fileSize",
         "error",
+        "engine",
+        "extractor",
+        "title",
     }
     cols: list[str] = []
     vals: list[Any] = []

@@ -13,8 +13,10 @@ downloadm3u8 -o output.mp4 "https://…/playlist.m3u8"
 - **Single download** (`/`) — title + m3u8 link form
 - **Batch downloads** (`/batch`) — table UI for multiple jobs
 - **From URL** (`/extract`) — paste a video page URL; auto-fetch title + m3u8 when present
+- **All-video downloader** (`/all-video-downloader`) — public page/media URLs via **yt-dlp** + HLS/ffmpeg + direct HTTP (DRM hosts blocked)
 - **Prisma + SQLite** job history and status
 - **Background queue** — **Redis + Celery** process-isolated workers (prefork); parallel downloads without hanging the Next.js process
+- **Cookies.txt**, playlist toggle, quality/format pickers, optional AI classify router (`CLASSIFY_AI_URL` / `CLASSIFY_AI_KEY`)
 - **shadcn/ui** components + Magic UI-style grid background & animated theme toggle
 - **axios · zustand · motion · react-hook-form · react-icons**
 
@@ -26,7 +28,8 @@ downloadm3u8 -o output.mp4 "https://…/playlist.m3u8"
 | State | Zustand + axios polling |
 | DB | Prisma 7 + SQLite (`better-sqlite3` adapter, WAL for multi-worker) |
 | Queue | **Redis 7** + **Celery 5** (prefork pool, late ack, time limits) |
-| Downloader | **Python** `download_stream.py` (`ffmpeg` / `downloadm3u8`) in isolated child processes |
+| All-video | **yt-dlp** + smart router (`classify_media.py`) |
+| Downloader | **Python** `download_stream.py` / `all_video_download.py` in isolated child processes |
 | Extract | **Python** `extract_stream.py` (requests + BeautifulSoup + Playwright) |
 | Deploy | Docker / Docker Compose (`web` + `redis` + `worker`) |
 

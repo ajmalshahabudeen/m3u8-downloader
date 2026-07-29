@@ -36,10 +36,6 @@ function formatBytes(bytes: number | null) {
   return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString();
-}
-
 export function DownloadsList({
   emptyMessage = "No downloads yet.",
 }: {
@@ -110,6 +106,18 @@ export function DownloadsList({
               <TableCell>
                 <div className="flex flex-col gap-1">
                   <span className="font-medium leading-tight">{item.title}</span>
+                  <div className="flex flex-wrap gap-1">
+                    {item.jobType === "all_video" && (
+                      <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 font-mono text-[10px] text-indigo-600 dark:text-indigo-300">
+                        all-video
+                      </span>
+                    )}
+                    {item.engine && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                        {item.engine}
+                      </span>
+                    )}
+                  </div>
                   {item.fileName && (
                     <span className="font-mono text-xs text-muted-foreground">
                       {item.fileName}
@@ -159,10 +167,10 @@ export function DownloadsList({
                   </span>
                 </div>
               </TableCell>
-              <TableCell className="hidden lg:table-cell font-mono text-xs uppercase text-muted-foreground">
+              <TableCell className="hidden font-mono text-xs uppercase text-muted-foreground lg:table-cell">
                 {item.format || "mp4"}
               </TableCell>
-              <TableCell className="hidden xl:table-cell text-sm text-muted-foreground">
+              <TableCell className="hidden text-sm text-muted-foreground xl:table-cell">
                 {formatBytes(item.fileSize)}
               </TableCell>
               <TableCell className="text-right">

@@ -21,7 +21,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "m3u8 Downloader",
   description:
-    "Download HLS m3u8 streams as MP4 — single, batch, or auto-extract from a video page.",
+    "Download public videos & HLS — single, batch, extract, or all-video (yt-dlp).",
 };
 
 export default function RootLayout({
@@ -57,7 +57,7 @@ export default function RootLayout({
             {children}
           </main>
           <footer className="border-t py-6 text-center font-mono text-xs text-muted-foreground">
-            m3u8 Downloader · Next.js · Prisma SQLite · ffmpeg / m3u8downloader
+            m3u8 Downloader · Next.js · Prisma · Redis/Celery · yt-dlp / ffmpeg
           </footer>
         </Providers>
       </body>

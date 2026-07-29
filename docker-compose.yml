@@ -17,11 +17,11 @@ services:
     build: .
     container_name: m3u8-downloader
     ports:
-      # Uncommon host/container port to avoid clashes with typical Next/dev services
       - "38478:38478"
     environment:
       DATABASE_URL: file:/app/data/prod.db
       DOWNLOADS_DIR: /app/downloads
+      COOKIES_DIR: /app/data/cookies
       PORT: "38478"
       HOSTNAME: "0.0.0.0"
       DOWNLOADER: ffmpeg
@@ -31,9 +31,17 @@ services:
       MAX_CONCURRENT_DOWNLOADS: "2"
       DOWNLOAD_TIMEOUT_MS: "1800000"
       NODE_ENV: production
-      # Redis + Celery queue (process-isolated workers)
       REDIS_URL: redis://redis:6379/0
       QUEUE_BACKEND: celery
+      ALL_VIDEO_ENABLED: "1"
+      ALL_VIDEO_MAX_CONCURRENT: "3"
+      ALL_VIDEO_MAX_PER_HOUR: "30"
+      ALL_VIDEO_MAX_FILE_BYTES: "8589934592"
+      ALL_VIDEO_TIMEOUT_S: "1800"
+      # Optional AI router (OpenAI-compatible). Leave empty for rules-only.
+      CLASSIFY_AI_URL: "${CLASSIFY_AI_URL:-}"
+      CLASSIFY_AI_KEY: "${CLASSIFY_AI_KEY:-}"
+      CLASSIFY_AI_MODEL: "${CLASSIFY_AI_MODEL:-gpt-4o-mini}"
     depends_on:
       redis:
         condition: service_healthy
@@ -56,7 +64,6 @@ services:
       retries: 12
       start_period: 45s
 
-  # Dedicated Celery workers — prefork = one OS process per concurrent job
   worker:
     build: .
     container_name: m3u8-worker
@@ -64,6 +71,7 @@ services:
     environment:
       DATABASE_URL: file:/app/data/prod.db
       DOWNLOADS_DIR: /app/downloads
+      COOKIES_DIR: /app/data/cookies
       DOWNLOADER: ffmpeg
       DOWNLOADM3U8_BIN: /usr/local/bin/downloadm3u8
       PYTHON_BIN: python3
@@ -78,17 +86,16 @@ services:
       CELERY_QUEUES: downloads,extracts
       CELERY_LOGLEVEL: INFO
       DOWNLOAD_TIMEOUT_MS: "1800000"
+      ALL_VIDEO_MAX_FILE_BYTES: "8589934592"
+      ALL_VIDEO_TIMEOUT_S: "1800"
       NODE_ENV: production
     depends_on:
       redis:
         condition: service_healthy
     volumes:
-      # Share SQLite + downloads with the web app
       - m3u8-data:/app/data
       - m3u8-downloads:/app/downloads
     restart: unless-stopped
-    # Scale with: docker compose up -d --scale worker=2
-    # (use unique hostnames; celery hostname already includes %h)
 
 volumes:
   m3u8-data:

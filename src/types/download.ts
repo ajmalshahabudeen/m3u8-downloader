@@ -42,6 +42,11 @@ export interface DownloadRecord {
   filePath: string | null;
   error: string | null;
   fileSize: number | null;
+  jobType: string;
+  engine: string | null;
+  extractor: string | null;
+  playlist: boolean;
+  ytdlpFormat: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -61,6 +66,12 @@ export function serializeDownload(download: {
   filePath: string | null;
   error: string | null;
   fileSize: number | null;
+  jobType?: string | null;
+  engine?: string | null;
+  extractor?: string | null;
+  playlist?: boolean | null;
+  ytdlpFormat?: string | null;
+  cookiePath?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): DownloadRecord {
@@ -79,6 +90,11 @@ export function serializeDownload(download: {
     filePath: download.filePath,
     error: download.error,
     fileSize: download.fileSize,
+    jobType: download.jobType ?? "hls",
+    engine: download.engine ?? null,
+    extractor: download.extractor ?? null,
+    playlist: Boolean(download.playlist),
+    ytdlpFormat: download.ytdlpFormat ?? null,
     createdAt: download.createdAt.toISOString(),
     updatedAt: download.updatedAt.toISOString(),
   };
@@ -91,6 +107,8 @@ export type StreamVariant = {
   resolution?: string | null;
   codecs?: string | null;
   label: string;
+  segmentCount?: number;
+  durationSec?: number | null;
 };
 
 export type ProbeResult = {
@@ -98,4 +116,43 @@ export type ProbeResult = {
   isMaster: boolean;
   variants: StreamVariant[];
   warnings: string[];
+  segmentCount?: number;
+  durationSec?: number | null;
+};
+
+export type AllVideoAnalyzeResult = {
+  ok: boolean;
+  url?: string;
+  title?: string | null;
+  engine?: string | null;
+  extractor?: string | null;
+  isPlaylist?: boolean;
+  playlistCount?: number;
+  duration?: number | null;
+  thumbnail?: string | null;
+  formats?: Array<{
+    id?: string | null;
+    label?: string;
+    height?: number | null;
+    ext?: string | null;
+    resolution?: string | null;
+    tbr?: number | null;
+    note?: string | null;
+    url?: string;
+  }>;
+  classification?: {
+    engine?: string;
+    confidence?: number;
+    reason?: string;
+    needs_cookies?: boolean;
+    is_drm_likely?: boolean;
+    blocked?: boolean;
+    error_code?: string | null;
+    ai?: { used?: boolean; model?: string; reason?: string; error?: string };
+  };
+  warnings?: string[];
+  disclaimer?: string;
+  error?: string;
+  error_code?: string;
+  resolvedUrl?: string;
 };

@@ -53,10 +53,12 @@ RUN mkdir -p /ms-playwright \
       -r /tmp/requirements.txt \
       m3u8downloader \
   && ln -sf /usr/local/bin/downloadm3u8 /usr/bin/downloadm3u8 2>/dev/null || true \
+  && ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp 2>/dev/null || true \
   && python3 -m playwright install chromium \
   && python3 -m playwright install-deps chromium || true \
   && chmod -R a+rx /ms-playwright \
   && rm -f /tmp/requirements.txt \
+  && python3 -c "import yt_dlp; print('yt-dlp', yt_dlp.version.__version__)" \
   && python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True, args=['--no-sandbox','--disable-dev-shm-usage']); b.close(); p.stop(); print('playwright-chromium-ok')"
 
 ENV NEXT_TELEMETRY_DISABLED=1 \

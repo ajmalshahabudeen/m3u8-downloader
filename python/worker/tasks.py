@@ -146,10 +146,15 @@ def run_download(self, download_id: str) -> dict:
     """Process one download job in an isolated worker process."""
     log.info("run_download start id=%s task_id=%s", download_id, self.request.id)
 
+    # Also skip pure HLS worker for all_video jobs (routed to run_all_video)
     row = db.get_download(download_id)
     if not row:
         log.warning("download missing id=%s", download_id)
         return {"ok": False, "error": "not_found"}
+    if (row.get("jobType") or "hls") == "all_video":
+        log.info("delegating all_video id=%s", download_id)
+        # .run executes body in-process (same worker child) with proper bind
+        return run_all_video.run(download_id)
 
     # Claim if still pending; allow re-run if already mid-flight from enqueue race
     claimed = db.claim_download(download_id)
@@ -313,6 +318,184 @@ def _fail(download_id: str, file_path: str, message: str) -> None:
 
 
 @app.task(
+    name="worker.tasks.run_all_video",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=20,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def run_all_video(self, download_id: str) -> dict:
+    """Universal downloader job (yt-dlp / HLS / direct) in isolated process."""
+    log.info("run_all_video start id=%s task_id=%s", download_id, self.request.id)
+
+    row = db.get_download(download_id)
+    if not row:
+        return {"ok": False, "error": "not_found"}
+
+    claimed = db.claim_download(download_id)
+    if not claimed:
+        status = (row.get("status") or "").upper()
+        if status == "COMPLETED":
+            return {"ok": True, "skipped": True, "reason": "already_completed"}
+        if status == "PENDING":
+            return {"ok": True, "skipped": True, "reason": "claimed_elsewhere"}
+        db.force_start(download_id)
+
+    row = db.get_download(download_id) or row
+    title = row.get("title") or "video"
+    fmt = (row.get("format") or "mp4").lower()
+    url = row.get("url") or ""
+    referer = (row.get("referer") or "").strip()
+    cookie_path = (row.get("cookiePath") or "").strip()
+    playlist = bool(row.get("playlist"))
+    ytdlp_format = (row.get("ytdlpFormat") or "").strip()
+    engine = (row.get("engine") or "auto").strip() or "auto"
+    quality = (row.get("resolution") or "best").strip() or "best"
+
+    file_name, file_path = build_output_path(title, fmt)
+    db.update_download(
+        download_id,
+        fileName=file_name,
+        filePath=file_path,
+        status="PROBING",
+        stage="probing",
+        stageLabel="Analyzing media",
+        progress=1,
+        error=None,
+        engine=engine,
+    )
+
+    last_progress = 1
+
+    def on_stderr(line: str) -> None:
+        nonlocal last_progress
+        m = re.match(r"^STAGE\s+(\S+)\s+(.+)$", line, re.I)
+        if m:
+            stage = m.group(1).lower()
+            label = m.group(2).strip()
+            status = STAGE_TO_STATUS.get(stage, "DOWNLOADING")
+            try:
+                db.update_download(
+                    download_id,
+                    status=status,
+                    stage=stage,
+                    stageLabel=label,
+                )
+            except Exception:
+                pass
+            return
+        m = re.match(r"^PROGRESS\s+(\d+)", line, re.I)
+        if not m:
+            return
+        nxt = int(m.group(1))
+        if nxt <= last_progress:
+            return
+        last_progress = nxt
+        try:
+            db.update_download(download_id, progress=nxt)
+        except Exception:
+            pass
+
+    args = [
+        "--mode",
+        "download",
+        "--url",
+        url,
+        "--output",
+        file_path,
+        "--format",
+        fmt,
+        "--quality",
+        quality,
+        "--engine",
+        engine,
+        "--timeout",
+        str(DOWNLOAD_TIMEOUT_S),
+        "--no-ai",  # AI only on analyze path to keep workers deterministic
+    ]
+    if referer:
+        args.extend(["--referer", referer])
+    if cookie_path:
+        args.extend(["--cookies", cookie_path])
+    if playlist:
+        args.append("--playlist")
+    if ytdlp_format:
+        args.extend(["--ytdlp-format", ytdlp_format])
+
+    try:
+        code, stdout, stderr = _run_script(
+            _script("all_video_download.py"),
+            args,
+            timeout_s=DOWNLOAD_TIMEOUT_S + 60,
+            on_line=on_stderr,
+        )
+        try:
+            result = _parse_json_stdout(stdout)
+        except Exception as e:
+            raise RuntimeError(
+                stderr.strip()[-1500:]
+                or f"all_video_download.py invalid JSON (exit {code}): {e}"
+            ) from e
+
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "All-video download failed")
+
+        # Output path may change extension (audio extract)
+        out_path = Path(result.get("output") or file_path)
+        if not out_path.exists() or out_path.stat().st_size <= 0:
+            raise RuntimeError("Download finished but output file missing/empty")
+
+        size = int(result.get("fileSize") or out_path.stat().st_size)
+        final_name = out_path.name
+        updates = {
+            "status": "COMPLETED",
+            "stage": "completed",
+            "stageLabel": "Completed",
+            "progress": 100,
+            "fileName": final_name,
+            "filePath": str(out_path),
+            "fileSize": size,
+            "error": None,
+            "engine": result.get("engine") or engine,
+        }
+        if result.get("extractor"):
+            updates["extractor"] = result.get("extractor")
+        if result.get("title") and (title in ("video", "All video", "Extracted stream")):
+            updates["title"] = result["title"]
+            # optional rename is skipped to avoid races
+        db.update_download(download_id, **updates)
+        log.info("run_all_video done id=%s size=%s", download_id, size)
+        return {"ok": True, "filePath": str(out_path), "fileSize": size}
+
+    except SoftTimeLimitExceeded:
+        msg = "Task soft time limit exceeded"
+        log.error("run_all_video timeout id=%s", download_id)
+        _fail(download_id, file_path, msg)
+        raise
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        log.error("run_all_video failed id=%s: %s", download_id, msg)
+        _fail(download_id, file_path, msg)
+        low = msg.lower()
+        transient = any(
+            x in low
+            for x in ("timeout", "ssl", "tls", "connection", "temporarily", "503", "502")
+        )
+        if transient and self.request.retries < self.max_retries:
+            db.update_download(
+                download_id,
+                status="PENDING",
+                stage="queued",
+                stageLabel="Retrying…",
+                progress=0,
+                error=msg[:500],
+            )
+            raise self.retry(exc=e)
+        return {"ok": False, "error": msg}
+
+
+@app.task(
     name="worker.tasks.run_extract",
     bind=True,
     max_retries=2,
@@ -350,10 +533,15 @@ def requeue_stale_pending(limit: int = 50) -> dict:
     from worker.celery_app import app as celery_app
 
     ids = db.list_pending_ids(limit=limit)
+    enqueued = []
     for i in ids:
-        celery_app.send_task(
-            "worker.tasks.run_download",
-            args=[i],
-            queue="downloads",
+        row = db.get_download(i)
+        job_type = (row or {}).get("jobType") or "hls"
+        task = (
+            "worker.tasks.run_all_video"
+            if job_type == "all_video"
+            else "worker.tasks.run_download"
         )
-    return {"enqueued": len(ids), "ids": ids}
+        celery_app.send_task(task, args=[i], queue="downloads")
+        enqueued.append({"id": i, "task": task})
+    return {"enqueued": len(enqueued), "ids": enqueued}

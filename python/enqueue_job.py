@@ -3,6 +3,7 @@
 
 Usage:
   python enqueue_job.py --type download --id <cuid>
+  python enqueue_job.py --type all-video --id <cuid>
   python enqueue_job.py --type download --id a --id b
   python enqueue_job.py --type extract --url https://...
   python enqueue_job.py --type requeue-pending
@@ -14,7 +15,6 @@ import json
 import os
 import sys
 
-# Ensure /app/python is on path when run as script
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -22,20 +22,22 @@ if _HERE not in sys.path:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--type", required=True, choices=("download", "extract", "requeue-pending"))
+    p.add_argument(
+        "--type",
+        required=True,
+        choices=("download", "all-video", "extract", "requeue-pending"),
+    )
     p.add_argument("--id", action="append", default=[], dest="ids")
     p.add_argument("--url", default="")
     p.add_argument("--deep", action="store_true", default=True)
     p.add_argument("--no-deep", action="store_true")
     args = p.parse_args()
 
-    # Import after path fix
     from worker.celery_app import app
 
     deep = False if args.no_deep else True
 
     try:
-        # Fail fast if Redis is down
         conn = app.connection()
         conn.ensure_connection(max_retries=3)
         conn.release()
@@ -43,19 +45,20 @@ def main() -> None:
         print(json.dumps({"ok": False, "error": f"Redis/broker unavailable: {e}"}))
         raise SystemExit(2)
 
-    if args.type == "download":
+    if args.type in ("download", "all-video"):
         if not args.ids:
             print(json.dumps({"ok": False, "error": "Provide at least one --id"}))
             raise SystemExit(1)
+        task_name = (
+            "worker.tasks.run_all_video"
+            if args.type == "all-video"
+            else "worker.tasks.run_download"
+        )
         task_ids = []
         for did in args.ids:
-            async_result = app.send_task(
-                "worker.tasks.run_download",
-                args=[did],
-                queue="downloads",
-            )
-            task_ids.append({"downloadId": did, "taskId": async_result.id})
-        print(json.dumps({"ok": True, "type": "download", "tasks": task_ids}))
+            async_result = app.send_task(task_name, args=[did], queue="downloads")
+            task_ids.append({"downloadId": did, "taskId": async_result.id, "task": task_name})
+        print(json.dumps({"ok": True, "type": args.type, "tasks": task_ids}))
         return
 
     if args.type == "extract":
@@ -67,15 +70,7 @@ def main() -> None:
             args=[args.url.strip(), deep],
             queue="extracts",
         )
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "type": "extract",
-                    "taskId": async_result.id,
-                }
-            )
-        )
+        print(json.dumps({"ok": True, "type": "extract", "taskId": async_result.id}))
         return
 
     if args.type == "requeue-pending":

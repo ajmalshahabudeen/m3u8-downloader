@@ -38,6 +38,7 @@ app.conf.update(
     task_default_queue="downloads",
     task_routes={
         "worker.tasks.run_download": {"queue": "downloads"},
+        "worker.tasks.run_all_video": {"queue": "downloads"},
         "worker.tasks.run_extract": {"queue": "extracts"},
         "worker.tasks.requeue_stale_pending": {"queue": "downloads"},
     },
