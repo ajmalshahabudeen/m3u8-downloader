@@ -2,11 +2,13 @@
 # -----------------------------------------------------------------------------
 # m3u8-downloader — Linux / macOS / Git Bash launcher
 #
-# - Checks Docker CLI + daemon (with retries)
+# - Checks Docker CLI + daemon (with auto-start self-healing)
 # - Detects container existence / running / healthy
 # - Fingerprints app sources to detect OLD vs NEW code
 # - Auto rebuilds + recreates container when code changed
+# - Progressive retry & self-healing stack recovery logic
 # - Opens the app URL in the browser
+# - Keeps terminal open with interactive exit prompt
 # -----------------------------------------------------------------------------
 set -u
 
@@ -23,9 +25,9 @@ FP_FILE="${FP_FILE:-.docker-build-fingerprint}"
 # FORCE_BUILD=1 always rebuilds even if fingerprint matches
 FORCE_BUILD="${FORCE_BUILD:-0}"
 
-DOCKER_READY_RETRIES="${DOCKER_READY_RETRIES:-30}"
+DOCKER_READY_RETRIES="${DOCKER_READY_RETRIES:-35}"
 DOCKER_READY_SLEEP="${DOCKER_READY_SLEEP:-2}"
-START_RETRIES="${START_RETRIES:-3}"
+START_RETRIES="${START_RETRIES:-4}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-60}"
 HEALTH_SLEEP="${HEALTH_SLEEP:-2}"
 
@@ -47,6 +49,29 @@ ok()   { printf '%s[%s]%s %s\n' "$C_GREEN" "ok" "$C_RESET" "$*"; }
 warn() { printf '%s[%s]%s %s\n' "$C_YELLOW" "warn" "$C_RESET" "$*"; }
 err()  { printf '%s[%s]%s %s\n' "$C_RED" "error" "$C_RESET" "$*" >&2; }
 die()  { err "$*"; exit 1; }
+
+finish() {
+  local code=$?
+  trap - EXIT INT TERM
+  echo ""
+  if [[ $code -eq 0 ]]; then
+    printf "%s========================================%s\n" "$C_GREEN" "$C_RESET"
+    printf "%s [ok] m3u8-downloader completed successfully.%s\n" "$C_GREEN" "$C_RESET"
+    printf "%s========================================%s\n" "$C_GREEN" "$C_RESET"
+  else
+    printf "%s========================================%s\n" "$C_RED" "$C_RESET"
+    printf "%s [error] Launcher exited with code %d.%s\n" "$C_RED" "$code" "$C_RESET"
+    printf "%s         Review error messages above for details.%s\n" "$C_RED" "$C_RESET"
+    printf "%s========================================%s\n" "$C_RED" "$C_RESET"
+  fi
+  echo ""
+  printf "%sPress [Enter] to close terminal window...%s\n" "$C_CYAN" "$C_RESET"
+  if [[ -t 0 ]] || [[ -t 1 ]]; then
+    read -r _unused < /dev/tty 2>/dev/null || read -r _unused || true
+  fi
+  exit "$code"
+}
+trap finish EXIT INT TERM
 
 resolve_compose() {
   if docker compose version >/dev/null 2>&1; then
@@ -78,22 +103,41 @@ http_ok() {
   return 1
 }
 
+try_start_docker_daemon() {
+  warn "[self-heal] Attempting to auto-start Docker daemon..."
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    if [[ -d "/Applications/Docker.app" ]]; then
+      open -a Docker >/dev/null 2>&1 && ok "Launched Docker.app for macOS. Waiting for daemon startup..." && return 0
+    fi
+  elif command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl start docker >/dev/null 2>&1 && ok "Triggered systemctl start docker..." && return 0
+  elif command -v service >/dev/null 2>&1; then
+    sudo service docker start >/dev/null 2>&1 && ok "Triggered service docker start..." && return 0
+  fi
+  return 1
+}
+
 wait_for_docker() {
   log "Checking Docker CLI..."
   command -v docker >/dev/null 2>&1 || die "Docker is not installed or not on PATH. Install Docker Desktop / Engine first."
 
   log "Waiting for Docker daemon (up to $((DOCKER_READY_RETRIES * DOCKER_READY_SLEEP))s)..."
   local i=1
+  local docker_started=0
   while (( i <= DOCKER_READY_RETRIES )); do
     if docker info >/dev/null 2>&1; then
       ok "Docker daemon is running."
       return 0
     fi
-    warn "Docker not ready yet (attempt ${i}/${DOCKER_READY_RETRIES}) — is Docker Desktop started?"
+    if (( i >= 3 && docker_started == 0 )); then
+      docker_started=1
+      try_start_docker_daemon || true
+    fi
+    warn "Docker not ready yet (attempt ${i}/${DOCKER_READY_RETRIES}) — waiting for Docker daemon..."
     sleep "$DOCKER_READY_SLEEP"
     ((i++)) || true
   done
-  die "Docker daemon did not become ready. Start Docker Desktop / the docker service and retry."
+  die "Docker daemon did not become ready. Start Docker Desktop / docker service and retry."
 }
 
 ensure_compose_file() {
@@ -120,10 +164,7 @@ container_label_fp() {
   docker inspect -f '{{ index .Config.Labels "com.m3u8.fingerprint" }}' "$CONTAINER_NAME" 2>/dev/null || true
 }
 
-# --- Fingerprint: detect old vs new code ------------------------------------
-# Hashes key app sources so script rebuilds when code changes.
 list_fingerprint_files() {
-  # Fixed config files
   local f
   for f in \
     Dockerfile \
@@ -138,7 +179,6 @@ list_fingerprint_files() {
     [[ -f "$f" ]] && printf '%s\n' "$f"
   done
 
-  # Source trees that affect the image / runtime
   if command -v find >/dev/null 2>&1; then
     find src python prisma \
       \( -name node_modules -o -name .next -o -name generated \) -prune -o \
@@ -158,7 +198,6 @@ hash_stream() {
   elif command -v openssl >/dev/null 2>&1; then
     openssl dgst -sha256 | awk '{print $NF}'
   else
-    # Weak fallback
     cksum | awk '{print $1"-"$2}'
   fi
 }
@@ -166,17 +205,14 @@ hash_stream() {
 compute_fingerprint() {
   local tmp
   tmp="$(mktemp 2>/dev/null || echo ".fp-manifest.$$")"
-  # manifest: path + size + sha of each file
   {
     list_fingerprint_files | while IFS= read -r f; do
       [[ -f "$f" ]] || continue
-      # path + content hash
       if command -v sha256sum >/dev/null 2>&1; then
         printf '%s %s\n' "$f" "$(sha256sum "$f" | awk '{print $1}')"
       elif command -v shasum >/dev/null 2>&1; then
         printf '%s %s\n' "$f" "$(shasum -a 256 "$f" | awk '{print $1}')"
       else
-        # size + mtime fallback
         printf '%s %s\n' "$f" "$(wc -c <"$f" 2>/dev/null | tr -d ' ')-$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)"
       fi
     done
@@ -227,7 +263,6 @@ detect_code_change() {
     return
   fi
 
-  # Fingerprint file matches, but container label may differ (manual edits / old image)
   if container_exists; then
     local label_fp
     label_fp="$(container_label_fp | tr -d '[:space:]')"
@@ -244,7 +279,6 @@ detect_code_change() {
   ok "Sources match last build — no code rebuild required."
 }
 
-# Write fingerprint into compose env so image/container can be labeled
 export_compose_fingerprint() {
   export M3U8_BUILD_FINGERPRINT="$CURRENT_FP"
 }
@@ -262,14 +296,12 @@ start_stack() {
     args+=(--force-recreate)
   fi
 
-  # No image at all → always build
   if ! image_exists; then
     log "No local image found — building."
     args=(up -d --build)
     NEED_BUILD=1
   fi
 
-  # Container missing → ensure up (build if needed)
   if ! container_exists && (( ! NEED_BUILD )); then
     log "Container does not exist — creating."
   fi
@@ -287,10 +319,24 @@ start_stack() {
       return 0
     fi
 
-    warn "compose up failed (attempt ${attempt}/${START_RETRIES}). Retrying with --build --force-recreate..."
-    args=(up -d --build --force-recreate)
-    NEED_BUILD=1
-    NEED_RECREATE=1
+    warn "compose up failed (attempt ${attempt}/${START_RETRIES})."
+
+    if (( attempt == 2 )); then
+      warn "[self-heal] Retrying compose up with forced build and recreate..."
+      args=(up -d --build --force-recreate)
+      NEED_BUILD=1
+      NEED_RECREATE=1
+    elif (( attempt == 3 )); then
+      warn "[self-heal] Cleaning stale container/builder state and fingerprint cache..."
+      compose down --remove-orphans >/dev/null 2>&1 || true
+      docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+      docker builder prune -f >/dev/null 2>&1 || true
+      rm -f "$FP_FILE" 2>/dev/null || true
+      args=(up -d --build --force-recreate)
+      NEED_BUILD=1
+      NEED_RECREATE=1
+    fi
+
     ((attempt++)) || true
     sleep 3
   done
@@ -311,7 +357,7 @@ ensure_container_running() {
     if container_exists; then
       warn "Container exists but is stopped — starting (attempt ${i}/${max})..."
       if ! docker start "$CONTAINER_NAME" >/dev/null 2>&1; then
-        warn "docker start failed — compose up..."
+        warn "[self-heal] docker start failed — compose up..."
         compose up -d >/dev/null 2>&1 || true
       fi
     else
@@ -341,9 +387,13 @@ wait_for_health() {
       ok "App is healthy."
       return 0
     fi
-    if (( i % 10 == 0 )) && ! container_running; then
-      warn "Container stopped during health wait — restarting..."
+    if (( i % 8 == 0 )) && ! container_running; then
+      warn "[self-heal] Container stopped during health wait — restarting..."
       compose up -d >/dev/null 2>&1 || docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+    if (( i == 25 )); then
+      warn "[self-heal] Health check pending — attempting soft restart of container '${CONTAINER_NAME}'..."
+      docker restart "$CONTAINER_NAME" >/dev/null 2>&1 || true
     fi
     printf '  … not ready yet (%s/%s)\r' "$i" "$HEALTH_RETRIES"
     sleep "$HEALTH_SLEEP"
@@ -406,10 +456,9 @@ decide_actions() {
 
   log "Container exists=$( ((exists)) && echo yes || echo no )  running=$( ((running)) && echo yes || echo no )  healthy=$( ((healthy)) && echo yes || echo no )"
 
-  # Fast path: healthy + no code change
   if (( running && healthy && !CODE_CHANGED && FORCE_BUILD != 1 )); then
     ok "Container running with current code — no update needed."
-    return 1  # signal fast path
+    return 1
   fi
 
   if (( CODE_CHANGED )); then
@@ -425,7 +474,6 @@ decide_actions() {
   elif (( running && !healthy )); then
     warn "Container running but unhealthy — will recreate."
     NEED_RECREATE=1
-    # rebuild if we don't trust image
     if (( CODE_CHANGED )); then NEED_BUILD=1; fi
   fi
 

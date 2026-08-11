@@ -4,15 +4,20 @@ setlocal EnableExtensions EnableDelayedExpansion
 REM =============================================================================
 REM m3u8-downloader — Windows launcher (cmd.exe)
 REM
-REM - Checks Docker CLI + daemon (with retries)
+REM - Checks Docker CLI + daemon (with auto-start self-healing)
 REM - Detects container existence / running / healthy
 REM - Fingerprints app sources to detect OLD vs NEW code
 REM - Auto rebuilds + recreates container when code changed
+REM - Progressive retry & self-healing stack recovery logic
 REM - Opens the app URL in the browser
+REM - Keeps terminal open with interactive exit prompt
 REM =============================================================================
 
 cd /d "%~dp0" || (
   echo [error] Failed to cd to script directory.
+  echo.
+  echo Press Enter to close terminal...
+  pause >nul
   exit /b 1
 )
 
@@ -25,9 +30,9 @@ if not defined COMPOSE_FILE set "COMPOSE_FILE=docker-compose.yml"
 if not defined FP_FILE set "FP_FILE=.docker-build-fingerprint"
 if not defined FORCE_BUILD set "FORCE_BUILD=0"
 
-set "DOCKER_READY_RETRIES=30"
+set "DOCKER_READY_RETRIES=35"
 set "DOCKER_READY_SLEEP=2"
-set "START_RETRIES=3"
+set "START_RETRIES=4"
 set "HEALTH_RETRIES=60"
 set "HEALTH_SLEEP=2"
 set "USE_COMPOSE_V2=0"
@@ -39,6 +44,25 @@ set "CURRENT_FP="
 set "STORED_FP="
 set "FAST_PATH=0"
 
+call :main
+set "EXIT_CODE=%ERRORLEVEL%"
+
+echo.
+if "%EXIT_CODE%"=="0" (
+  echo [%APP_NAME%] Process finished successfully.
+) else (
+  echo [%APP_NAME%] Launcher encountered an error ^(Exit Code: !EXIT_CODE!^).
+  echo             Review diagnostic messages above for details.
+)
+echo.
+echo =============================================================================
+echo Press Enter to close this terminal window...
+echo =============================================================================
+pause >nul
+exit /b %EXIT_CODE%
+
+REM =============================================================================
+:main
 echo [%APP_NAME%] Project root: %CD%
 
 call :check_docker_cli || exit /b 1
@@ -65,7 +89,7 @@ REM ---------------------------------------------------------------------------
 echo [%APP_NAME%] Checking Docker CLI...
 where docker >nul 2>&1
 if errorlevel 1 (
-  echo [error] Docker is not installed or not on PATH.
+  echo [error] Docker CLI is not installed or not on PATH.
   echo         Install Docker Desktop for Windows, then re-open this terminal.
   exit /b 1
 )
@@ -76,18 +100,45 @@ REM ---------------------------------------------------------------------------
 :wait_for_docker
 echo [%APP_NAME%] Waiting for Docker daemon...
 set /a _i=1
+set "_docker_started=0"
+
 :docker_loop
 docker info >nul 2>&1
 if not errorlevel 1 (
   echo [ok] Docker daemon is running.
   exit /b 0
 )
-echo [warn] Docker not ready yet (attempt !_i!/%DOCKER_READY_RETRIES%^) — is Docker Desktop started?
+
+if "!_docker_started!"=="0" (
+  if !_i! GEQ 3 (
+    set "_docker_started=1"
+    call :try_start_docker_desktop
+  )
+)
+
+echo [warn] Docker not ready yet ^(attempt !_i!/%DOCKER_READY_RETRIES%^) — waiting for Docker Desktop...
 timeout /t %DOCKER_READY_SLEEP% /nobreak >nul
 set /a _i+=1
 if !_i! LEQ %DOCKER_READY_RETRIES% goto docker_loop
-echo [error] Docker daemon did not become ready.
+
+echo [error] Docker daemon did not become ready after %DOCKER_READY_RETRIES% attempts.
+echo         Please start Docker Desktop and try running this script again.
 exit /b 1
+
+:try_start_docker_desktop
+echo [self-heal] Attempting to auto-start Docker Desktop for Windows...
+set "_exe="
+if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" set "_exe=%ProgramFiles%\Docker\Docker\Docker Desktop.exe"
+if not defined _exe if exist "%ProgramW6432%\Docker\Docker\Docker Desktop.exe" set "_exe=%ProgramW6432%\Docker\Docker\Docker Desktop.exe"
+if not defined _exe if exist "%LocalAppData%\Programs\Docker\Docker\Docker Desktop.exe" set "_exe=%LocalAppData%\Programs\Docker\Docker Desktop.exe"
+
+if defined _exe (
+  start "" "%_exe%"
+  echo [ok] Launched Docker Desktop ^("%_exe%"^). Waiting for engine startup...
+) else (
+  echo [warn] Could not locate Docker Desktop executable automatically.
+)
+exit /b 0
 
 REM ---------------------------------------------------------------------------
 :resolve_compose
@@ -116,7 +167,6 @@ exit /b 0
 
 REM ---------------------------------------------------------------------------
 :compute_fingerprint
-REM Hash key project files via PowerShell (SHA256 of paths+contents)
 for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$paths = @('Dockerfile','docker-compose.yml','package.json','package-lock.json','next.config.ts','tsconfig.json','prisma.config.ts','docker-entrypoint.sh');" ^
@@ -282,7 +332,6 @@ exit /b 0
 
 REM ---------------------------------------------------------------------------
 :compose_up_cmd
-REM args via COMPOSE_ARGS env-like var
 if "%USE_COMPOSE_V2%"=="1" (
   docker compose -f "%COMPOSE_FILE%" %COMPOSE_ARGS%
 ) else (
@@ -320,15 +369,34 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-echo [warn] compose up failed ^(attempt !_attempt!/%START_RETRIES%^). Retrying with --build --force-recreate...
-set "NEED_BUILD=1"
-set "NEED_RECREATE=1"
-set "COMPOSE_ARGS=up -d --build --force-recreate"
+echo [warn] compose up failed ^(attempt !_attempt!/%START_RETRIES%^).
+
+if !_attempt! EQU 2 (
+  echo [self-heal] Retrying compose up with forced build and recreate...
+  set "NEED_BUILD=1"
+  set "NEED_RECREATE=1"
+  set "COMPOSE_ARGS=up -d --build --force-recreate"
+) else if !_attempt! EQU 3 (
+  echo [self-heal] Cleaning stale container/builder state and fingerprint cache...
+  if "%USE_COMPOSE_V2%"=="1" (
+    docker compose -f "%COMPOSE_FILE%" down --remove-orphans >nul 2>&1
+  ) else (
+    docker-compose -f "%COMPOSE_FILE%" down --remove-orphans >nul 2>&1
+  )
+  docker rm -f "%CONTAINER_NAME%" >nul 2>&1
+  docker builder prune -f >nul 2>&1
+  if exist "%FP_FILE%" del "%FP_FILE%" >nul 2>&1
+  set "NEED_BUILD=1"
+  set "NEED_RECREATE=1"
+  set "COMPOSE_ARGS=up -d --build --force-recreate"
+)
+
 set /a _attempt+=1
-if !_attempt! GTR %START_RETRIES% goto start_fail
-timeout /t 3 /nobreak >nul
-goto start_loop
-:start_fail
+if !_attempt! LEQ %START_RETRIES% (
+  timeout /t 3 /nobreak >nul
+  goto start_loop
+)
+
 echo [error] Failed to start/update containers after %START_RETRIES% attempts.
 call :compose_logs
 exit /b 1
@@ -349,6 +417,7 @@ if not errorlevel 1 (
   echo [warn] Container exists but is stopped — starting ^(attempt !_i!/%_max%^)...
   docker start "%CONTAINER_NAME%" >nul 2>&1
   if errorlevel 1 (
+    echo [self-heal] docker start failed — executing compose up recovery...
     set "COMPOSE_ARGS=up -d"
     call :compose_up_cmd >nul 2>&1
   )
@@ -379,15 +448,21 @@ if not errorlevel 1 (
   echo [ok] App is healthy.
   exit /b 0
 )
-set /a _mod=_i %% 10
+set /a _mod=_i %% 8
 if !_mod! EQU 0 (
   call :container_running
   if errorlevel 1 (
-    echo [warn] Container stopped during health wait — restarting...
-    set "COMPOSE_ARGS=up -d"
-    call :compose_up_cmd >nul 2>&1
+    echo [self-heal] Container stopped unexpectedly during health wait — restarting container...
     docker start "%CONTAINER_NAME%" >nul 2>&1
+    if errorlevel 1 (
+      set "COMPOSE_ARGS=up -d"
+      call :compose_up_cmd >nul 2>&1
+    )
   )
+)
+if !_i! EQU 25 (
+  echo [self-heal] Health check pending — attempting soft restart of container '%CONTAINER_NAME%'...
+  docker restart "%CONTAINER_NAME%" >nul 2>&1
 )
 echo   ... not ready yet (!_i!/%HEALTH_RETRIES%^)
 timeout /t %HEALTH_SLEEP% /nobreak >nul
