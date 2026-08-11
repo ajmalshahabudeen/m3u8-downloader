@@ -2,3 +2,4 @@
 [2026-07-26 20:15] Removed legacy favicon.ico, created new dynamic icon.tsx (32x32) & apple-icon.tsx (180x180) with a modern HLS stream play & download emblem, and updated header logo badge to match.
 [2026-08-12 00:38] Added dedicated YouTube Playlist Downloader page (/youtube-playlist) with flat-extraction analysis in python, video title/thumbnail listing, individual download buttons, and automatic sequential batch queueing.
 [2026-08-12 01:15] Enhanced run.bat and run.sh with self-healing Docker Desktop auto-start, multi-tier retry error handling with stack/cache cleanup, terminal output retention, and interactive user exit prompts.
+[2026-08-12 02:37] Added selection checkboxes (defaulting to all selected) and an Auto-Save to Downloads batch download button in DownloadsList component.
