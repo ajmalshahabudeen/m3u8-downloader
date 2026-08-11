@@ -229,6 +229,80 @@ def run_ytdlp_analyze(url: str, cookie_path: str | None, referer: str | None) ->
     }
 
 
+def run_ytdlp_playlist_analyze(url: str, cookie_path: str | None, referer: str | None) -> dict[str, Any]:
+    import yt_dlp
+
+    opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "socket_timeout": 45,
+        "ignoreerrors": True,
+    }
+    if cookie_path and Path(cookie_path).is_file():
+        opts["cookiefile"] = cookie_path
+    headers = browser_headers(url, referer=referer)
+    opts["http_headers"] = headers
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if info is None:
+        raise RuntimeError("No playlist metadata returned")
+
+    title = info.get("title") or "YouTube Playlist"
+    uploader = info.get("uploader") or info.get("channel") or info.get("uploader_id") or ""
+    webpage_url = info.get("webpage_url") or url
+
+    raw_entries = info.get("entries") or []
+    videos = []
+
+    for idx, entry in enumerate(raw_entries, start=1):
+        if not entry:
+            continue
+        v_id = entry.get("id")
+        v_title = entry.get("title") or entry.get("name") or (f"Video {idx}" if v_id else None)
+        if not v_title:
+            continue
+
+        v_url = entry.get("url") or entry.get("webpage_url")
+        if not v_url or not v_url.startswith("http"):
+            if v_id:
+                v_url = f"https://www.youtube.com/watch?v={v_id}"
+            else:
+                continue
+
+        duration = entry.get("duration")
+        uploader_item = entry.get("uploader") or entry.get("channel") or uploader
+
+        thumbnail = entry.get("thumbnail")
+        if not thumbnail and v_id:
+            thumbnail = f"https://i.ytimg.com/vi/{v_id}/hqdefault.jpg"
+
+        videos.append(
+            {
+                "index": idx,
+                "id": v_id,
+                "title": v_title,
+                "url": v_url,
+                "duration": duration,
+                "uploader": uploader_item,
+                "thumbnail": thumbnail,
+            }
+        )
+
+    return {
+        "ok": True,
+        "title": title,
+        "uploader": uploader,
+        "playlistCount": len(videos),
+        "webpageUrl": webpage_url,
+        "videos": videos,
+    }
+
+
+
 def run_ytdlp_download(
     url: str,
     output_path: str,
@@ -618,7 +692,7 @@ def download(
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("analyze", "download"), default="download")
+    p.add_argument("--mode", choices=("analyze", "playlist_analyze", "download"), default="download")
     p.add_argument("--url", required=True)
     p.add_argument("--output", default="")
     p.add_argument("--format", default="mp4")
@@ -635,6 +709,14 @@ def main() -> None:
     url = args.url.strip()
     cookie_path = args.cookies.strip() or None
     referer = args.referer.strip() or None
+
+    if args.mode == "playlist_analyze":
+        try:
+            res = run_ytdlp_playlist_analyze(url, cookie_path, referer)
+            print(json.dumps(res, ensure_ascii=False))
+        except Exception as e:
+            die_result(str(e))
+        return
 
     if args.mode == "analyze":
         print(json.dumps(analyze(url, cookie_path, referer, use_ai=not args.no_ai), ensure_ascii=False))

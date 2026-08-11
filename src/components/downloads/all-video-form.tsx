@@ -100,10 +100,9 @@ export function AllVideoForm() {
     setAnalyzing(true);
     setAnalysis(null);
     setElapsed(0);
-    const started = Date.now();
     const timer = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - started) / 1000));
-    }, 250);
+      setElapsed((prev) => prev + 1);
+    }, 1000);
     try {
       const { data } = await axios.post(
         "/api/all-video/analyze",

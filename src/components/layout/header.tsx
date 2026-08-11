@@ -7,6 +7,7 @@ import {
   HiOutlineViewGridAdd,
   HiOutlineSearchCircle,
   HiOutlineGlobeAlt,
+  HiOutlineCollection,
 } from "react-icons/hi";
 import { AnimatedThemeToggler } from "@/components/magic-ui/animated-theme-toggler";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,11 @@ const links = [
     href: "/all-video-downloader",
     label: "All Video",
     icon: HiOutlineGlobeAlt,
+  },
+  {
+    href: "/youtube-playlist",
+    label: "YouTube Playlist",
+    icon: HiOutlineCollection,
   },
 ];
 
@@ -33,7 +39,7 @@ export function Header() {
             href="/"
             className="flex shrink-0 items-center gap-2 font-semibold tracking-tight"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-slate-950 via-indigo-950 to-indigo-900 border border-indigo-500/40 shadow-sm">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-linear-to-br from-slate-950 via-indigo-950 to-indigo-900 border border-indigo-500/40 shadow-sm">
               <svg
                 width="20"
                 height="20"
