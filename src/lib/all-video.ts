@@ -59,16 +59,22 @@ export async function checkAllVideoRateLimits(): Promise<string | null> {
   return null;
 }
 
+export function normalizeCookiesContent(content: string): string {
+  let clean = content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").trim();
+  if (!clean) return "";
+  if (!clean.startsWith("# Netscape")) {
+    clean = `# Netscape HTTP Cookie File\n${clean}`;
+  }
+  return clean;
+}
+
 export function saveCookiesFile(jobId: string, content: string): string {
-  const clean = content.replace(/^\uFEFF/, "").trim();
-  if (!clean) throw new Error("Empty cookies file");
-  // Basic Netscape cookies header check (soft)
-  if (
-    !clean.includes("# Netscape") &&
-    !clean.includes("http") &&
-    clean.split("\n").length < 2
-  ) {
-    throw new Error("Cookies must be Netscape cookies.txt format");
+  const clean = normalizeCookiesContent(content);
+  const dataLines = clean
+    .split("\n")
+    .filter((l) => l.trim() && !l.trim().startsWith("#"));
+  if (!clean || dataLines.length === 0) {
+    throw new Error("Empty or invalid Netscape cookies format");
   }
   const filePath = path.join(cookiesDir(), `${jobId}.txt`);
   fs.writeFileSync(filePath, clean, "utf8");

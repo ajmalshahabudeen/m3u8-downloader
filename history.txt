@@ -5,3 +5,5 @@
 [2026-08-12 02:37] Added selection checkboxes (defaulting to all selected) and an Auto-Save to Downloads batch download button in DownloadsList component.
 [2026-08-12 12:38] Provided diagnosis and step-by-step repair options for Redis container AOF corruption crash-loop (appendonly.aof.1.incr.aof).
 [2026-08-12 12:41] Integrated automated Redis AOF self-healing (repair & volume reset fallback) into run.bat and run.sh, and configured --aof-load-truncated yes in docker-compose.yml.
+[2026-08-12 15:10] Diagnosed YouTube cookie parsing and yt-dlp "Requested format is not available" error; drafted implementation plan for Netscape header auto-formatting, Node JS runtime options, SABR player client fallback, and robust format string fallback.
+[2026-08-12 15:20] Implemented Netscape header auto-formatting, Node JS runtime options (js_runtimes node), YouTube player_client fallback (android, web), and robust format string fallback chains across all-video-downloader and youtube-playlist routes. Verified with bun run build.

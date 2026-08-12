@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { parseJsonStdout, runPython } from "@/lib/python-runner";
-import { allVideoEnabled } from "@/lib/all-video";
+import { allVideoEnabled, normalizeCookiesContent } from "@/lib/all-video";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,7 +71,8 @@ export async function POST(request: Request) {
         path.join(/* turbopackIgnore: true */ process.cwd(), "data", "cookies");
       fs.mkdirSync(dir, { recursive: true });
       cookiePath = path.join(dir, `analyze-playlist-${Date.now()}.txt`);
-      fs.writeFileSync(cookiePath, parsed.data.cookies.trim(), "utf8");
+      const normalizedCookies = normalizeCookiesContent(parsed.data.cookies);
+      fs.writeFileSync(cookiePath, normalizedCookies, "utf8");
       args.push("--cookies", cookiePath);
     }
 

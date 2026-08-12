@@ -51,18 +51,37 @@ def die_result(error: str, code: int = 1, **extra: Any) -> None:
     raise SystemExit(code)
 
 
+def ensure_cookie_header(cookie_path: str | None) -> str | None:
+    if not cookie_path:
+        return None
+    p = Path(cookie_path)
+    if not p.is_file():
+        return None
+    try:
+        content = p.read_text(encoding="utf-8", errors="ignore")
+        clean = content.replace("\r\n", "\n").strip()
+        if clean and not clean.startswith("# Netscape"):
+            clean = "# Netscape HTTP Cookie File\n" + clean
+            p.write_text(clean, encoding="utf-8")
+    except Exception:
+        pass
+    return str(p)
+
+
 def quality_to_ytdlp_format(quality: str, audio_only: bool) -> str:
     q = (quality or "best").lower().strip()
     if audio_only:
-        return "ba/b"
+        return "ba/b/bestaudio/best"
     if q in ("best", "auto", ""):
-        return "bv*+ba/b"
+        return "bv*+ba/b/bestvideo+bestaudio/best"
     if q in ("worst", "worstvideo"):
-        return "wv*+wa/w"
+        return "wv*+wa/w/worstvideo+worstaudio/worst"
     m = re.match(r"^(\d{3,4})p?$", q)
     if m:
         h = int(m.group(1))
-        return f"bv*[height<={h}]+ba/b[height<={h}]/b"
+        return f"bv*[height<={h}]+ba/b[height<={h}]/bestvideo[height<={h}]+bestaudio/best[height<={h}]/b/best"
+    if re.match(r"^\d+$", q):
+        return f"{q}+ba/{q}/bv*+ba/b/best"
     # passthrough custom selector
     return quality
 
@@ -105,6 +124,11 @@ def map_ytdlp_error(msg: str) -> dict[str, str]:
         return {"error_code": "forbidden", "error": msg or "HTTP 403 Forbidden"}
     if "http error 404" in low or "404" in low:
         return {"error_code": "not_found", "error": msg or "HTTP 404 Not Found"}
+    if "requested format is not available" in low:
+        return {
+            "error_code": "format_not_available",
+            "error": "The requested video format is not available for this session. Try choosing 'Best available' or auto quality.",
+        }
     return {"error_code": "download_failed", "error": msg or "Download failed"}
 
 
@@ -158,8 +182,11 @@ def run_ytdlp_analyze(url: str, cookie_path: str | None, referer: str | None) ->
         "extract_flat": False,
         "socket_timeout": 30,
     }
+    cookie_path = ensure_cookie_header(cookie_path)
     if cookie_path and Path(cookie_path).is_file():
         opts["cookiefile"] = cookie_path
+    opts["js_runtimes"] = {"node": {}}
+    opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
     headers = browser_headers(url, referer=referer)
     opts["http_headers"] = headers
 
@@ -240,8 +267,11 @@ def run_ytdlp_playlist_analyze(url: str, cookie_path: str | None, referer: str |
         "socket_timeout": 45,
         "ignoreerrors": True,
     }
+    cookie_path = ensure_cookie_header(cookie_path)
     if cookie_path and Path(cookie_path).is_file():
         opts["cookiefile"] = cookie_path
+    opts["js_runtimes"] = {"node": {}}
+    opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
     headers = browser_headers(url, referer=referer)
     opts["http_headers"] = headers
 
@@ -350,8 +380,11 @@ def run_ytdlp_download(
         ]
         opts.pop("merge_output_format", None)
 
+    cookie_path = ensure_cookie_header(cookie_path)
     if cookie_path and Path(cookie_path).is_file():
         opts["cookiefile"] = cookie_path
+    opts["js_runtimes"] = {"node": {}}
+    opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
     opts["http_headers"] = browser_headers(url, referer=referer)
 
     emit_stage("probing", "Extracting media info (yt-dlp)")
