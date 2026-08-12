@@ -69,6 +69,7 @@ call :check_docker_cli || exit /b 1
 call :wait_for_docker || exit /b 1
 call :resolve_compose || exit /b 1
 call :ensure_compose_file || exit /b 1
+call :check_and_fix_redis_aof
 call :decide_actions || exit /b 1
 
 if "!FAST_PATH!"=="1" (
@@ -181,7 +182,7 @@ for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass
   "}" ^
   "$sb = New-Object System.Text.StringBuilder;" ^
   "$files | Sort-Object -Unique | ForEach-Object {" ^
-  "  $rel = $_.Substring((Get-Location).Path.Length).TrimStart('\\','/').Replace('\\','/');" ^
+  "  $rel = $_.Substring((Get-Location).Path.Length).TrimStart([char[]]'\/').Replace('\','/');" ^
   "  $hash = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash;" ^
   "  [void]$sb.AppendLine(($rel + ' ' + $hash))" ^
   "};" ^
@@ -373,11 +374,13 @@ echo [warn] compose up failed ^(attempt !_attempt!/%START_RETRIES%^).
 
 if !_attempt! EQU 2 (
   echo [self-heal] Retrying compose up with forced build and recreate...
+  call :check_and_fix_redis_aof
   set "NEED_BUILD=1"
   set "NEED_RECREATE=1"
   set "COMPOSE_ARGS=up -d --build --force-recreate"
 ) else if !_attempt! EQU 3 (
   echo [self-heal] Cleaning stale container/builder state and fingerprint cache...
+  call :check_and_fix_redis_aof
   if "%USE_COMPOSE_V2%"=="1" (
     docker compose -f "%COMPOSE_FILE%" down --remove-orphans >nul 2>&1
   ) else (
@@ -450,6 +453,7 @@ if not errorlevel 1 (
 )
 set /a _mod=_i %% 8
 if !_mod! EQU 0 (
+  call :check_and_fix_redis_aof
   call :container_running
   if errorlevel 1 (
     echo [self-heal] Container stopped unexpectedly during health wait — restarting container...
@@ -471,6 +475,34 @@ if !_i! LEQ %HEALTH_RETRIES% goto health_loop
 echo [error] Health check timed out. Recent logs:
 call :compose_logs
 exit /b 1
+
+REM ---------------------------------------------------------------------------
+:check_and_fix_redis_aof
+docker inspect m3u8-redis >nul 2>&1 || exit /b 0
+docker logs --tail 60 m3u8-redis 2>&1 | findstr /i /c:"Bad file format reading the append only file" /c:"redis-check-aof --fix" >nul 2>&1
+if errorlevel 1 exit /b 0
+
+echo [self-heal] Detected corrupted Redis AOF log in m3u8-redis. Executing auto-repair...
+docker stop m3u8-redis >nul 2>&1
+docker run --rm --volumes-from m3u8-redis redis:7-alpine redis-check-aof --fix /data/appendonly.aof.manifest >nul 2>&1
+
+docker start m3u8-redis >nul 2>&1
+timeout /t 2 /nobreak >nul
+docker logs --tail 20 m3u8-redis 2>&1 | findstr /i /c:"Bad file format reading the append only file" >nul 2>&1
+if errorlevel 1 (
+  echo [ok] Redis AOF file repaired successfully.
+  exit /b 0
+)
+
+echo [self-heal] AOF repair failed — resetting corrupted Redis container and volume...
+if "%USE_COMPOSE_V2%"=="1" (
+  docker compose -f "%COMPOSE_FILE%" rm -f -s -v redis >nul 2>&1
+) else (
+  docker-compose -f "%COMPOSE_FILE%" rm -f -s -v redis >nul 2>&1
+)
+docker volume rm m3u8-downloader_m3u8-redis m3u8-redis >nul 2>&1
+echo [ok] Redis volume reset successfully.
+exit /b 0
 
 REM ---------------------------------------------------------------------------
 :open_browser

@@ -323,11 +323,13 @@ start_stack() {
 
     if (( attempt == 2 )); then
       warn "[self-heal] Retrying compose up with forced build and recreate..."
+      check_and_fix_redis_aof || true
       args=(up -d --build --force-recreate)
       NEED_BUILD=1
       NEED_RECREATE=1
     elif (( attempt == 3 )); then
       warn "[self-heal] Cleaning stale container/builder state and fingerprint cache..."
+      check_and_fix_redis_aof || true
       compose down --remove-orphans >/dev/null 2>&1 || true
       docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
       docker builder prune -f >/dev/null 2>&1 || true
@@ -387,9 +389,12 @@ wait_for_health() {
       ok "App is healthy."
       return 0
     fi
-    if (( i % 8 == 0 )) && ! container_running; then
-      warn "[self-heal] Container stopped during health wait — restarting..."
-      compose up -d >/dev/null 2>&1 || docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    if (( i % 8 == 0 )); then
+      check_and_fix_redis_aof || true
+      if ! container_running; then
+        warn "[self-heal] Container stopped during health wait — restarting..."
+        compose up -d >/dev/null 2>&1 || docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+      fi
     fi
     if (( i == 25 )); then
       warn "[self-heal] Health check pending — attempting soft restart of container '${CONTAINER_NAME}'..."
@@ -484,6 +489,7 @@ main() {
   log "Project root: ${ROOT_DIR}"
   wait_for_docker
   ensure_compose_file
+  check_and_fix_redis_aof || true
 
   if ! decide_actions; then
     open_browser
@@ -496,6 +502,32 @@ main() {
   wait_for_health
   open_browser
   print_summary
+}
+
+check_and_fix_redis_aof() {
+  if ! docker inspect m3u8-redis >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! docker logs --tail 60 m3u8-redis 2>&1 | grep -qE "Bad file format reading the append only file|redis-check-aof --fix"; then
+    return 0
+  fi
+
+  warn "[self-heal] Detected corrupted Redis AOF log in m3u8-redis. Executing auto-repair..."
+  docker stop m3u8-redis >/dev/null 2>&1 || true
+  docker run --rm --volumes-from m3u8-redis redis:7-alpine redis-check-aof --fix /data/appendonly.aof.manifest >/dev/null 2>&1 || true
+
+  docker start m3u8-redis >/dev/null 2>&1 || true
+  sleep 2
+
+  if ! docker logs --tail 20 m3u8-redis 2>&1 | grep -q "Bad file format reading the append only file"; then
+    ok "Redis AOF file repaired successfully."
+    return 0
+  fi
+
+  warn "[self-heal] AOF repair failed — resetting corrupted Redis container and volume..."
+  compose rm -f -s -v redis >/dev/null 2>&1 || true
+  docker volume rm m3u8-downloader_m3u8-redis m3u8-redis >/dev/null 2>&1 || true
+  ok "Redis volume reset successfully."
 }
 
 main "$@"

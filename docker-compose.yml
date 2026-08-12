@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: m3u8-redis
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    command: ["redis-server", "--appendonly", "yes", "--aof-load-truncated", "yes", "--maxmemory-policy", "noeviction"]
     volumes:
       - m3u8-redis:/data
     restart: unless-stopped
