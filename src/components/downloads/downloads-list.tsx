@@ -21,6 +21,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { fileDownloadUrl } from "@/lib/api";
 import { useDownloadStore } from "@/store/download-store";
 import type { DownloadRecord } from "@/types/download";
@@ -42,11 +53,12 @@ export function DownloadsList({
 }: {
   emptyMessage?: string;
 }) {
-  const { downloads, loading, load, remove, retry } = useDownloadStore();
+  const { downloads, loading, load, remove, removeMany, retry } = useDownloadStore();
 
   // Track unselected item IDs so all new/existing items default to checked (selected)
   const [unselectedIds, setUnselectedIds] = useState<Set<string>>(new Set());
   const [isBatchSaving, setIsBatchSaving] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   useEffect(() => {
     void load();
@@ -106,6 +118,24 @@ export function DownloadsList({
     } else {
       // Select all
       setUnselectedIds(new Set());
+    }
+  };
+
+  const onClearDownloads = async () => {
+    if (selectedDownloads.length === 0) {
+      toast.error("No downloads selected to clear.");
+      return;
+    }
+
+    setIsClearing(true);
+    const count = selectedDownloads.length;
+    try {
+      await removeMany(selectedDownloads.map((d) => d.id));
+      toast.success(`Cleared ${count} download entry/entries`);
+    } catch {
+      toast.error("Failed to clear downloads");
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -181,18 +211,71 @@ export function DownloadsList({
         </div>
 
         <div className="flex items-center gap-2">
-          <Button
-            variant="default"
-            size="sm"
-            disabled={isBatchSaving || selectedCompletedDownloads.length === 0}
-            onClick={() => void onAutoSaveToDownloads()}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs transition-all"
-          >
-            <FiDownload className={`mr-1.5 h-4 w-4 ${isBatchSaving ? "animate-bounce" : ""}`} />
-            {isBatchSaving
-              ? "Saving..."
-              : `Auto-Save to Downloads (${selectedCompletedDownloads.length})`}
-          </Button>
+          {/* Clear List Button with Confirmation */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isClearing || selectedDownloads.length === 0}
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive transition-all"
+              >
+                <FiTrash2 className={`mr-1.5 h-4 w-4 ${isClearing ? "animate-spin" : ""}`} />
+                {isClearing ? "Clearing..." : `Clear List (${selectedDownloads.length})`}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Clear Selected Downloads?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to clear {selectedDownloads.length} selected download entry/entries from your list?
+                  This will remove them from the download queue, but any files already saved to disk will not be deleted.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => void onClearDownloads()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Clear Downloads
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* Auto-Save to Downloads Button with Confirmation */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={isBatchSaving || selectedCompletedDownloads.length === 0}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs transition-all"
+              >
+                <FiDownload className={`mr-1.5 h-4 w-4 ${isBatchSaving ? "animate-bounce" : ""}`} />
+                {isBatchSaving
+                  ? "Saving..."
+                  : `Auto-Save to Downloads (${selectedCompletedDownloads.length})`}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Auto-Save to Downloads?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will trigger downloads for {selectedCompletedDownloads.length} completed file(s) to your browser&apos;s default Downloads folder.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => void onAutoSaveToDownloads()}
+                >
+                  Save Files
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
@@ -321,14 +404,34 @@ export function DownloadsList({
                         <FiRefreshCw className="h-4 w-4" />
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => void onDelete(item)}
-                      title="Delete entry"
-                    >
-                      <FiTrash2 className="h-4 w-4 text-destructive" />
-                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="Delete entry"
+                        >
+                          <FiTrash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove Download?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Are you sure you want to remove &quot;{item.title}&quot; from your downloads list?
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => void onDelete(item)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            Remove Entry
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 </TableCell>
               </TableRow>
@@ -339,4 +442,3 @@ export function DownloadsList({
     </div>
   );
 }
-

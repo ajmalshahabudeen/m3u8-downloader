@@ -40,6 +40,10 @@ export async function deleteDownload(id: string) {
   await api.delete(`/downloads/${id}`);
 }
 
+export async function deleteBatchDownloads(ids?: string[]) {
+  await api.delete("/downloads", { data: { ids } });
+}
+
 export async function retryDownload(id: string) {
   const { data } = await api.patch<{ download: DownloadRecord }>(
     `/downloads/${id}`,

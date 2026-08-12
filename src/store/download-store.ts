@@ -5,6 +5,7 @@ import type { DownloadRecord } from "@/types/download";
 import {
   createBatchDownloads,
   createDownload,
+  deleteBatchDownloads,
   deleteDownload,
   fetchDownloads,
   retryDownload,
@@ -20,6 +21,7 @@ interface DownloadState {
   addOne: (payload: CreateDownloadPayload) => Promise<DownloadRecord>;
   addMany: (items: CreateDownloadPayload[]) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  removeMany: (ids?: string[]) => Promise<void>;
   retry: (id: string) => Promise<void>;
 }
 
@@ -58,6 +60,16 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   remove: async (id) => {
     await deleteDownload(id);
     set({ downloads: get().downloads.filter((d) => d.id !== id) });
+  },
+
+  removeMany: async (ids) => {
+    await deleteBatchDownloads(ids);
+    if (!ids || ids.length === 0) {
+      set({ downloads: [] });
+    } else {
+      const setIds = new Set(ids);
+      set({ downloads: get().downloads.filter((d) => !setIds.has(d.id)) });
+    }
   },
 
   retry: async (id) => {

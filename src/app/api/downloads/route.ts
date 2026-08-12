@@ -98,3 +98,24 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function DELETE(request: Request) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    if (body && Array.isArray(body.ids) && body.ids.length > 0) {
+      await prisma.download.deleteMany({
+        where: { id: { in: body.ids } },
+      });
+    } else {
+      await prisma.download.deleteMany({});
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("DELETE /api/downloads", error);
+    return NextResponse.json(
+      { error: "Failed to delete downloads" },
+      { status: 500 },
+    );
+  }
+}
+
