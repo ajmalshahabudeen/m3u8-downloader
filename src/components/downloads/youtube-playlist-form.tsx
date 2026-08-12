@@ -462,7 +462,29 @@ export function YouTubePlaylistForm() {
                   </CardDescription>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="yt-results-quality" className="text-xs text-muted-foreground">
+                      Quality:
+                    </Label>
+                    <Select
+                      value={quality}
+                      onValueChange={setQuality}
+                      disabled={queuing}
+                    >
+                      <SelectTrigger id="yt-results-quality" className="h-9 w-37.5 text-xs">
+                        <SelectValue placeholder="Quality" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {QUALITIES.map((q) => (
+                          <SelectItem key={q.value} value={q.value} className="text-xs">
+                            {q.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   <Button
                     type="button"
                     onClick={downloadSelectedVideos}
@@ -477,7 +499,7 @@ export function YouTubePlaylistForm() {
                     ) : (
                       <>
                         <ArrowDownToLine className="mr-2 h-4 w-4" />
-                        Download {selectedIds.size} Selected Automatically
+                        Download {selectedIds.size} Selected ({QUALITIES.find((q) => q.value === quality)?.label || quality})
                       </>
                     )}
                   </Button>

@@ -431,15 +431,47 @@ export function AllVideoForm() {
 
               {analysis.formats && analysis.formats.length > 0 && (
                 <div className="space-y-2">
-                  <Label>Detected formats (info)</Label>
-                  <div className="max-h-40 overflow-auto rounded-md border p-2 font-mono text-xs">
-                    {analysis.formats.slice(0, 15).map((f, i) => (
-                      <div key={i} className="truncate text-muted-foreground">
-                        {f.label || f.id || "format"}
-                        {f.height ? ` · ${f.height}p` : ""}
-                        {f.ext ? ` · ${f.ext}` : ""}
-                      </div>
-                    ))}
+                  <div className="flex items-center justify-between">
+                    <Label>Detected formats (Click to select)</Label>
+                    <span className="text-xs text-muted-foreground">
+                      {analysis.formats.length} formats probed
+                    </span>
+                  </div>
+                  <div className="flex max-h-48 flex-wrap gap-2 overflow-auto rounded-md border p-2 text-xs">
+                    {analysis.formats.slice(0, 20).map((f, i) => {
+                      const isSelected = ytdlpFormat === f.id;
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => {
+                            if (f.height) {
+                              setQuality(String(f.height));
+                            }
+                            setYtdlpFormat(f.id || "");
+                            toast.info(`Selected format: ${f.id} (${f.height ? `${f.height}p` : f.ext || "format"})`);
+                          }}
+                          className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-left font-mono transition-colors hover:border-primary ${
+                            isSelected
+                              ? "border-primary bg-primary/10 text-primary font-semibold"
+                              : "border-border/60 bg-muted/20 text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <span className="font-bold">{f.id}</span>
+                          {f.height ? (
+                            <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                              {f.height}p
+                            </Badge>
+                          ) : null}
+                          {f.ext ? (
+                            <span className="uppercase text-[10px] opacity-75">{f.ext}</span>
+                          ) : null}
+                          {f.note ? (
+                            <span className="text-[10px] text-muted-foreground">({f.note})</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}

@@ -186,7 +186,8 @@ def run_ytdlp_analyze(url: str, cookie_path: str | None, referer: str | None) ->
     if cookie_path and Path(cookie_path).is_file():
         opts["cookiefile"] = cookie_path
     opts["js_runtimes"] = {"node": {}}
-    opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+    opts["remote_components"] = ["ejs:github"]
+    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "web", "tv"]}}
     headers = browser_headers(url, referer=referer)
     opts["http_headers"] = headers
 
@@ -271,7 +272,8 @@ def run_ytdlp_playlist_analyze(url: str, cookie_path: str | None, referer: str |
     if cookie_path and Path(cookie_path).is_file():
         opts["cookiefile"] = cookie_path
     opts["js_runtimes"] = {"node": {}}
-    opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+    opts["remote_components"] = ["ejs:github"]
+    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "web", "tv"]}}
     headers = browser_headers(url, referer=referer)
     opts["http_headers"] = headers
 
@@ -384,7 +386,8 @@ def run_ytdlp_download(
     if cookie_path and Path(cookie_path).is_file():
         opts["cookiefile"] = cookie_path
     opts["js_runtimes"] = {"node": {}}
-    opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+    opts["remote_components"] = ["ejs:github"]
+    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "web", "tv"]}}
     opts["http_headers"] = browser_headers(url, referer=referer)
 
     emit_stage("probing", "Extracting media info (yt-dlp)")
@@ -675,7 +678,10 @@ def download(
         chosen = decision.get("engine") or "auto"
 
     audio_only = fmt in ("mp3", "m4a")
-    sel = ytdlp_format or quality_to_ytdlp_format(quality, audio_only)
+    if ytdlp_format:
+        sel = f"{ytdlp_format}+ba/{ytdlp_format}/bv*+ba/b/best" if not audio_only else f"{ytdlp_format}/ba/b/best"
+    else:
+        sel = quality_to_ytdlp_format(quality, audio_only)
 
     # Resolve auto chain
     if chosen in ("ytdlp", "auto") and ytdlp_available():
