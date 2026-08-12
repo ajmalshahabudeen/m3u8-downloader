@@ -187,7 +187,6 @@ def run_ytdlp_analyze(url: str, cookie_path: str | None, referer: str | None) ->
         opts["cookiefile"] = cookie_path
     opts["js_runtimes"] = {"node": {}}
     opts["remote_components"] = ["ejs:github"]
-    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "web", "tv"]}}
     headers = browser_headers(url, referer=referer)
     opts["http_headers"] = headers
 
@@ -273,7 +272,6 @@ def run_ytdlp_playlist_analyze(url: str, cookie_path: str | None, referer: str |
         opts["cookiefile"] = cookie_path
     opts["js_runtimes"] = {"node": {}}
     opts["remote_components"] = ["ejs:github"]
-    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "web", "tv"]}}
     headers = browser_headers(url, referer=referer)
     opts["http_headers"] = headers
 
@@ -387,7 +385,6 @@ def run_ytdlp_download(
         opts["cookiefile"] = cookie_path
     opts["js_runtimes"] = {"node": {}}
     opts["remote_components"] = ["ejs:github"]
-    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "web", "tv"]}}
     opts["http_headers"] = browser_headers(url, referer=referer)
 
     emit_stage("probing", "Extracting media info (yt-dlp)")
