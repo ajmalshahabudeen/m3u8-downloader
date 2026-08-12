@@ -7,6 +7,8 @@ import {
 } from "@/lib/validations";
 import { serializeDownload } from "@/types/download";
 
+import { purgeDownloadFiles, purgeAllDownloadsDirFiles } from "@/lib/file-cleanup";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -103,11 +105,22 @@ export async function DELETE(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     if (body && Array.isArray(body.ids) && body.ids.length > 0) {
+      const items = await prisma.download.findMany({
+        where: { id: { in: body.ids } },
+      });
+      for (const item of items) {
+        purgeDownloadFiles(item);
+      }
       await prisma.download.deleteMany({
         where: { id: { in: body.ids } },
       });
     } else {
+      const allItems = await prisma.download.findMany({});
+      for (const item of allItems) {
+        purgeDownloadFiles(item);
+      }
       await prisma.download.deleteMany({});
+      purgeAllDownloadsDirFiles();
     }
     return NextResponse.json({ success: true });
   } catch (error) {

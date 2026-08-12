@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import fs from "node:fs";
 import { prisma } from "@/lib/prisma";
 import { enqueueDownloads } from "@/lib/download-worker";
 import { serializeDownload } from "@/types/download";
+
+import { purgeDownloadFiles } from "@/lib/file-cleanup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,13 +26,7 @@ export async function DELETE(_request: Request, { params }: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (download.filePath && fs.existsSync(download.filePath)) {
-    try {
-      fs.unlinkSync(download.filePath);
-    } catch (error) {
-      console.warn("Failed to delete file", download.filePath, error);
-    }
-  }
+  purgeDownloadFiles(download);
 
   await prisma.download.delete({ where: { id } });
   return NextResponse.json({ ok: true });
